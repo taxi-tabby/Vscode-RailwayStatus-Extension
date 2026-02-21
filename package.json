@@ -1,0 +1,138 @@
+{
+  "name": "railway-status",
+  "displayName": "Railway Status",
+  "description": "View Railway.com deployment statuses directly in VS Code",
+  "version": "0.1.0",
+  "publisher": "railway-status",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "keywords": ["railway", "deployment", "status", "cloud", "devops"],
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "railway",
+          "title": "Railway",
+          "icon": "resources/railway.svg"
+        }
+      ]
+    },
+    "views": {
+      "railway": [
+        {
+          "id": "railwayStatus",
+          "name": "Status"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "railwayStatus",
+        "contents": "Sign in to Railway to view your projects.\n[Sign in with Railway](command:railway.login)\n[Use API Token](command:railway.loginWithToken)",
+        "when": "!railway.authenticated"
+      }
+    ],
+    "commands": [
+      {
+        "command": "railway.login",
+        "title": "Sign in with Railway",
+        "category": "Railway"
+      },
+      {
+        "command": "railway.loginWithToken",
+        "title": "Set API Token",
+        "category": "Railway"
+      },
+      {
+        "command": "railway.refresh",
+        "title": "Refresh",
+        "category": "Railway",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "railway.openInBrowser",
+        "title": "Open in Browser",
+        "category": "Railway",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "railway.copyUrl",
+        "title": "Copy Service URL",
+        "category": "Railway",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "railway.logout",
+        "title": "Sign Out",
+        "category": "Railway"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "railway.refresh",
+          "when": "view == railwayStatus && railway.authenticated",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "railway.openInBrowser",
+          "when": "viewItem == railwayService",
+          "group": "inline"
+        },
+        {
+          "command": "railway.copyUrl",
+          "when": "viewItem == railwayService"
+        },
+        {
+          "command": "railway.openInBrowser",
+          "when": "viewItem == railwayProject"
+        }
+      ]
+    },
+    "authentication": [
+      {
+        "id": "railway",
+        "label": "Railway"
+      }
+    ],
+    "configuration": {
+      "title": "Railway Status",
+      "properties": {
+        "railwayStatus.oauthClientId": {
+          "type": "string",
+          "default": "",
+          "description": "OAuth Client ID from Railway Developer Settings. Required for OAuth sign-in."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.mjs --production",
+    "watch": "node esbuild.config.mjs --watch",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0"
+  }
+}
