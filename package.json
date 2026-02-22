@@ -71,6 +71,24 @@
         "icon": "$(copy)"
       },
       {
+        "command": "railway.sortBy",
+        "title": "Sort By...",
+        "category": "Railway",
+        "icon": "$(list-ordered)"
+      },
+      {
+        "command": "railway.enableAutoRefresh",
+        "title": "Enable Auto Refresh",
+        "category": "Railway",
+        "icon": "$(play)"
+      },
+      {
+        "command": "railway.disableAutoRefresh",
+        "title": "Pause Auto Refresh",
+        "category": "Railway",
+        "icon": "$(debug-pause)"
+      },
+      {
         "command": "railway.logout",
         "title": "Sign Out",
         "category": "Railway"
@@ -78,6 +96,21 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "railway.enableAutoRefresh",
+          "when": "view == railwayStatus && railway.authenticated && !railway.autoRefreshEnabled",
+          "group": "navigation"
+        },
+        {
+          "command": "railway.disableAutoRefresh",
+          "when": "view == railwayStatus && railway.authenticated && railway.autoRefreshEnabled",
+          "group": "navigation"
+        },
+        {
+          "command": "railway.sortBy",
+          "when": "view == railwayStatus && railway.authenticated",
+          "group": "navigation"
+        },
         {
           "command": "railway.refresh",
           "when": "view == railwayStatus && railway.authenticated",
@@ -109,10 +142,22 @@
     "configuration": {
       "title": "Railway Status",
       "properties": {
-        "railwayStatus.oauthClientId": {
-          "type": "string",
-          "default": "",
-          "description": "OAuth Client ID from Railway Developer Settings. Required for OAuth sign-in."
+        "railway.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh deployment statuses for expanded projects."
+        },
+        "railway.autoRefreshActiveInterval": {
+          "type": "number",
+          "default": 10,
+          "minimum": 5,
+          "description": "Polling interval (seconds) when active deployments are detected."
+        },
+        "railway.autoRefreshIdleInterval": {
+          "type": "number",
+          "default": 30,
+          "minimum": 10,
+          "description": "Polling interval (seconds) when all deployments are stable."
         }
       }
     }

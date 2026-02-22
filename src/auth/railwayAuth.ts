@@ -1,17 +1,13 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
-import {
-  RAILWAY_OAUTH_AUTH_URL,
-  RAILWAY_OAUTH_TOKEN_URL,
-  OAUTH_SCOPES,
-  OAUTH_CALLBACK_PATH,
-  OAUTH_CALLBACK_PORT,
-} from '../constants';
+import * as os from 'node:os';
+import { RAILWAY_CLI_LOGIN_URL } from '../constants';
 import { TokenStore } from './tokenStore';
 
 const AUTH_PROVIDER_ID = 'railway';
 const AUTH_PROVIDER_LABEL = 'Railway';
+const RAILWAY_ORIGIN = 'https://railway.com';
 
 export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscode.Disposable {
   private _onDidChangeSessions = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
@@ -49,76 +45,34 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
   }
 
   async createSession(_scopes: string[]): Promise<vscode.AuthenticationSession> {
-    const clientId = vscode.workspace.getConfiguration('railwayStatus').get<string>('oauthClientId');
-    if (!clientId) {
-      throw new Error(
-        'OAuth Client ID not configured. Set "railwayStatus.oauthClientId" in settings, or use "Railway: Set API Token" instead.'
-      );
+    const { port, server, tokenPromise } = await this.startCallbackServer();
+
+    const code = generateNumericCode(32);
+    const payload = `port=${port}&code=${code}&hostname=${os.hostname()}`;
+    // Use base64 with URL-safe characters (matching Rust CLI's URL_SAFE + padding)
+    const encoded = Buffer.from(payload).toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+
+    const loginUrl = `${RAILWAY_CLI_LOGIN_URL}?d=${encoded}`;
+    await vscode.env.openExternal(vscode.Uri.parse(loginUrl));
+
+    try {
+      const token = await tokenPromise;
+      await this.tokenStore.storeAccessToken(token);
+
+      const session: vscode.AuthenticationSession = {
+        id: 'railway-session',
+        accessToken: token,
+        account: { id: 'railway-user', label: 'Railway User' },
+        scopes: [],
+      };
+
+      this._onDidChangeSessions.fire({ added: [session], removed: [], changed: [] });
+      return session;
+    } finally {
+      server.close();
     }
-
-    const { codeVerifier, codeChallenge } = generatePKCE();
-    const state = crypto.randomBytes(16).toString('hex');
-
-    // Start callback server on fixed port
-    const callback = this.startCallbackServer(state);
-    await callback.ready;
-    const redirectUri = `http://localhost:${OAUTH_CALLBACK_PORT}${OAUTH_CALLBACK_PATH}`;
-
-    // Build auth URL and open browser
-    const authUrl = new URL(RAILWAY_OAUTH_AUTH_URL);
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('client_id', clientId);
-    authUrl.searchParams.set('redirect_uri', redirectUri);
-    authUrl.searchParams.set('scope', OAUTH_SCOPES);
-    authUrl.searchParams.set('state', state);
-    authUrl.searchParams.set('code_challenge', codeChallenge);
-    authUrl.searchParams.set('code_challenge_method', 'S256');
-
-    await vscode.env.openExternal(vscode.Uri.parse(authUrl.toString()));
-
-    // Wait for auth code from callback
-    const authCode = await callback.code;
-
-    // Exchange code for tokens
-    const tokenResponse = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code: authCode,
-        redirect_uri: redirectUri,
-        client_id: clientId,
-        code_verifier: codeVerifier,
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      throw new Error(`Token exchange failed: ${errorText}`);
-    }
-
-    const tokens = (await tokenResponse.json()) as {
-      access_token: string;
-      refresh_token?: string;
-      id_token?: string;
-      expires_in?: number;
-    };
-
-    await this.tokenStore.storeOAuthTokens(
-      tokens.access_token,
-      tokens.refresh_token,
-      tokens.expires_in
-    );
-
-    const session: vscode.AuthenticationSession = {
-      id: 'railway-session',
-      accessToken: tokens.access_token,
-      account: { id: 'railway-user', label: 'Railway User' },
-      scopes: [],
-    };
-
-    this._onDidChangeSessions.fire({ added: [session], removed: [], changed: [] });
-    return session;
   }
 
   async removeSession(_sessionId: string): Promise<void> {
@@ -126,79 +80,64 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 
-  private startCallbackServer(expectedState: string): { ready: Promise<void>; code: Promise<string> } {
-    let resolveReady: () => void;
-    let rejectReady: (err: Error) => void;
-    let resolveCode: (code: string) => void;
-    let rejectCode: (err: Error) => void;
+  private startCallbackServer(): Promise<{
+    port: number;
+    server: http.Server;
+    tokenPromise: Promise<string>;
+  }> {
+    return new Promise((resolveStart, rejectStart) => {
+      let resolveToken: (token: string) => void;
+      let rejectToken: (err: Error) => void;
 
-    const readyPromise = new Promise<void>((res, rej) => { resolveReady = res; rejectReady = rej; });
-    const codePromise = new Promise<string>((res, rej) => {
-      resolveCode = res;
-      rejectCode = rej;
-    });
+      const tokenPromise = new Promise<string>((res, rej) => {
+        resolveToken = res;
+        rejectToken = rej;
+      });
 
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url ?? '/', `http://localhost`);
-      if (url.pathname !== OAUTH_CALLBACK_PATH) {
-        res.writeHead(404);
-        res.end('Not found');
-        return;
-      }
+      const server = http.createServer((req, res) => {
+        const corsHeaders: Record<string, string> = {
+          'Access-Control-Allow-Origin': RAILWAY_ORIGIN,
+          'Access-Control-Allow-Methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
+          'Access-Control-Allow-Headers': '*',
+        };
 
-      const code = url.searchParams.get('code');
-      const state = url.searchParams.get('state');
-      const error = url.searchParams.get('error');
+        // Handle CORS preflight
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, corsHeaders);
+          res.end();
+          return;
+        }
 
-      if (error) {
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<html><body><h1>Authentication Failed</h1><p>You can close this tab.</p></body></html>');
+        const url = new URL(req.url ?? '/', 'http://localhost');
+        const token = url.searchParams.get('token');
+
+        if (!token) {
+          res.writeHead(400, { 'Content-Type': 'application/json', ...corsHeaders });
+          res.end(JSON.stringify({ status: 'error', error: 'No token received' }));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
+        res.end(JSON.stringify({ status: 'Ok', error: '' }));
+        resolveToken(token);
+      });
+
+      server.on('error', (err) => {
+        rejectStart(err);
+      });
+
+      // Listen on random port (50000-60000 range like Railway CLI)
+      const port = 50000 + crypto.randomInt(10000);
+      server.listen(port, '127.0.0.1', () => {
+        resolveStart({ port, server, tokenPromise });
+      });
+
+      // Timeout after 2 minutes
+      setTimeout(() => {
         server.close();
-        rejectCode(new Error(`OAuth error: ${error}`));
-        return;
-      }
-
-      if (state !== expectedState) {
-        res.writeHead(400, { 'Content-Type': 'text/html' });
-        res.end('<html><body><h1>Invalid State</h1><p>CSRF validation failed.</p></body></html>');
-        server.close();
-        rejectCode(new Error('OAuth state mismatch'));
-        return;
-      }
-
-      if (!code) {
-        res.writeHead(400, { 'Content-Type': 'text/html' });
-        res.end('<html><body><h1>Missing Code</h1></body></html>');
-        server.close();
-        rejectCode(new Error('No authorization code received'));
-        return;
-      }
-
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end('<html><body><h1>Authentication Successful!</h1><p>You can close this tab and return to VS Code.</p></body></html>');
-      server.close();
-      resolveCode(code);
+        rejectToken!(new Error('Authentication timed out'));
+      }, 120_000);
     });
-
-    server.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        rejectReady!(new Error(`Port ${OAUTH_CALLBACK_PORT} is already in use. Close any other application using this port and try again.`));
-      } else {
-        rejectReady!(err);
-      }
-    });
-
-    server.listen(OAUTH_CALLBACK_PORT, '127.0.0.1', () => {
-      resolveReady!();
-    });
-
-    // Timeout after 2 minutes
-    setTimeout(() => {
-      server.close();
-      rejectCode!(new Error('OAuth callback timed out'));
-    }, 120_000);
-
-    return { ready: readyPromise, code: codePromise };
   }
 
   async loginWithToken(): Promise<void> {
@@ -230,11 +169,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
   }
 }
 
-function generatePKCE(): { codeVerifier: string; codeChallenge: string } {
-  const codeVerifier = crypto.randomBytes(32).toString('base64url');
-  const codeChallenge = crypto
-    .createHash('sha256')
-    .update(codeVerifier)
-    .digest('base64url');
-  return { codeVerifier, codeChallenge };
+function generateNumericCode(length: number): string {
+  const bytes = crypto.randomBytes(length);
+  return Array.from(bytes, (b) => (b % 10).toString()).join('');
 }

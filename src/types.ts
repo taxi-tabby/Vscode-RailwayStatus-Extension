@@ -45,13 +45,6 @@ export type DeploymentStatus =
   | 'SKIPPED'
   | 'NEEDS_APPROVAL';
 
-export interface OAuthTokens {
-  accessToken: string;
-  refreshToken?: string;
-  idToken?: string;
-  expiresAt?: number;
-}
-
 export interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string }>;

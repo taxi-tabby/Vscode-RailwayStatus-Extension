@@ -4,7 +4,8 @@
     {
       "type": "npm",
       "script": "watch",
-      "problemMatcher": ["$esbuild-watch"],
+      "label": "npm: watch",
+      "problemMatcher": "$esbuild-watch",
       "isBackground": true,
       "presentation": {
         "reveal": "never"

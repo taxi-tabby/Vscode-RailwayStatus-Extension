@@ -4,19 +4,14 @@ export const QUERY_WORKSPACES = `
       workspaces {
         id
         name
-      }
-    }
-  }
-`;
-
-export const QUERY_PROJECTS = `
-  query projects($workspaceId: String!) {
-    workspace(id: $workspaceId) {
-      projects {
-        edges {
-          node {
-            id
-            name
+        projects(first: 500) {
+          edges {
+            node {
+              id
+              name
+              createdAt
+              updatedAt
+            }
           }
         }
       }
@@ -56,7 +51,6 @@ export const QUERY_LATEST_DEPLOYMENT = `
         node {
           id
           status
-          url
           createdAt
         }
       }

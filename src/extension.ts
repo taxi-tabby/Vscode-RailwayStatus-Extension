@@ -2,21 +2,16 @@ import * as vscode from 'vscode';
 import { RailwayAuthProvider } from './auth/railwayAuth';
 import { TokenStore } from './auth/tokenStore';
 import { RailwayApiClient } from './api/client';
-import { RailwayTreeDataProvider } from './views/treeProvider';
+import { RailwayTreeDataProvider, type SortMode } from './views/treeProvider';
+import { ProjectNode, WorkspaceNode } from './views/nodes';
 
 export async function activate(context: vscode.ExtensionContext) {
   const tokenStore = new TokenStore(context.secrets);
   const authProvider = new RailwayAuthProvider(context, tokenStore);
 
-  const clientId = vscode.workspace
-    .getConfiguration('railwayStatus')
-    .get<string>('oauthClientId');
-
   const apiClient = new RailwayApiClient({
     getAccessToken: () => tokenStore.getAccessToken(),
     getApiToken: () => tokenStore.getApiToken(),
-    getRefreshToken: () => tokenStore.getRefreshToken(),
-    storeToken: (key, value) => tokenStore.storeToken(key, value),
     onAuthFailure: () => {
       vscode.commands.executeCommand('setContext', 'railway.authenticated', false);
       vscode.window
@@ -27,7 +22,6 @@ export async function activate(context: vscode.ExtensionContext) {
           }
         });
     },
-    clientId,
   });
 
   const treeProvider = new RailwayTreeDataProvider(apiClient);
@@ -35,6 +29,7 @@ export async function activate(context: vscode.ExtensionContext) {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
   });
+  treeProvider.setTreeView(treeView);
 
   // Check if already authenticated
   const hasToken = await tokenStore.hasAnyToken();
@@ -43,33 +38,38 @@ export async function activate(context: vscode.ExtensionContext) {
     treeProvider.refresh();
   }
 
+  // Auto-refresh defaults to enabled
+  const autoRefreshDefault = vscode.workspace.getConfiguration('railway').get<boolean>('autoRefresh', true);
+  treeProvider.pollingManager.setEnabled(autoRefreshDefault);
+  await vscode.commands.executeCommand('setContext', 'railway.autoRefreshEnabled', autoRefreshDefault);
+
+  // TreeView event listeners for polling
+  treeView.onDidExpandElement((e) => {
+    if (e.element instanceof ProjectNode) {
+      treeProvider.pollingManager.addProject(e.element.projectId, e.element.workspaceId);
+    }
+  });
+
+  treeView.onDidCollapseElement((e) => {
+    if (e.element instanceof ProjectNode) {
+      treeProvider.pollingManager.removeProject(e.element.projectId);
+    }
+    if (e.element instanceof WorkspaceNode) {
+      treeProvider.pollingManager.removeProjectsByWorkspace(e.element.workspaceId);
+    }
+  });
+
+  treeView.onDidChangeVisibility((e) => {
+    treeProvider.pollingManager.setViewVisible(e.visible);
+  });
+
   // Register commands
   context.subscriptions.push(
     treeView,
     authProvider,
+    treeProvider.pollingManager,
 
     vscode.commands.registerCommand('railway.login', async () => {
-      const currentClientId = vscode.workspace
-        .getConfiguration('railwayStatus')
-        .get<string>('oauthClientId');
-
-      if (!currentClientId) {
-        const choice = await vscode.window.showWarningMessage(
-          'OAuth Client ID is not configured. You need to register an OAuth app in Railway Developer Settings, or use an API token instead.',
-          'Open Settings',
-          'Use API Token'
-        );
-        if (choice === 'Open Settings') {
-          vscode.commands.executeCommand(
-            'workbench.action.openSettings',
-            'railwayStatus.oauthClientId'
-          );
-        } else if (choice === 'Use API Token') {
-          vscode.commands.executeCommand('railway.loginWithToken');
-        }
-        return;
-      }
-
       try {
         await vscode.authentication.getSession('railway', [], { createIfNone: true });
         await vscode.commands.executeCommand('setContext', 'railway.authenticated', true);
@@ -107,6 +107,30 @@ export async function activate(context: vscode.ExtensionContext) {
       } else {
         vscode.window.showWarningMessage('No URL available for this service');
       }
+    }),
+
+    vscode.commands.registerCommand('railway.sortBy', async () => {
+      const options: Array<{ label: string; description: string; mode: SortMode }> = [
+        { label: '$(list-ordered) Name', description: 'Sort alphabetically A → Z', mode: 'name' },
+        { label: '$(history) Created (oldest first)', description: 'Sort by creation date, oldest first', mode: 'createdAsc' },
+        { label: '$(clock) Updated (newest first)', description: 'Sort by last update, newest first', mode: 'updatedDesc' },
+      ];
+      const picked = await vscode.window.showQuickPick(options, {
+        placeHolder: 'Sort projects and services by...',
+      });
+      if (picked) {
+        treeProvider.setSortMode(picked.mode);
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.enableAutoRefresh', async () => {
+      treeProvider.pollingManager.setEnabled(true);
+      await vscode.commands.executeCommand('setContext', 'railway.autoRefreshEnabled', true);
+    }),
+
+    vscode.commands.registerCommand('railway.disableAutoRefresh', async () => {
+      treeProvider.pollingManager.setEnabled(false);
+      await vscode.commands.executeCommand('setContext', 'railway.autoRefreshEnabled', false);
     }),
 
     vscode.commands.registerCommand('railway.logout', async () => {

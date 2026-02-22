@@ -25,7 +25,9 @@ export class ProjectNode extends vscode.TreeItem {
     public readonly projectId: string,
     public readonly projectName: string,
     public readonly workspaceId: string,
-    serviceCount?: number
+    serviceCount?: number,
+    public readonly createdAt?: string,
+    public readonly updatedAt?: string
   ) {
     super(projectName, vscode.TreeItemCollapsibleState.Collapsed);
     this.iconPath = new vscode.ThemeIcon('package');
