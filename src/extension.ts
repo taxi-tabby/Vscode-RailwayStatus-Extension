@@ -49,6 +49,27 @@ export async function activate(context: vscode.ExtensionContext) {
     authProvider,
 
     vscode.commands.registerCommand('railway.login', async () => {
+      const currentClientId = vscode.workspace
+        .getConfiguration('railwayStatus')
+        .get<string>('oauthClientId');
+
+      if (!currentClientId) {
+        const choice = await vscode.window.showWarningMessage(
+          'OAuth Client ID is not configured. You need to register an OAuth app in Railway Developer Settings, or use an API token instead.',
+          'Open Settings',
+          'Use API Token'
+        );
+        if (choice === 'Open Settings') {
+          vscode.commands.executeCommand(
+            'workbench.action.openSettings',
+            'railwayStatus.oauthClientId'
+          );
+        } else if (choice === 'Use API Token') {
+          vscode.commands.executeCommand('railway.loginWithToken');
+        }
+        return;
+      }
+
       try {
         await vscode.authentication.getSession('railway', [], { createIfNone: true });
         await vscode.commands.executeCommand('setContext', 'railway.authenticated', true);
