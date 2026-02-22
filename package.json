@@ -3,7 +3,8 @@
   "displayName": "Railway Status",
   "description": "View Railway.com deployment statuses directly in VS Code",
   "version": "0.1.0",
-  "publisher": "railway-status",
+  "publisher": "taxi-tabby",
+  "icon": "icon.png",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
@@ -12,7 +13,7 @@
   "keywords": ["railway", "deployment", "status", "cloud", "devops"],
   "repository": {
     "type": "git",
-    "url": ""
+    "url": "https://github.com/taxi-tabby/Vscode-RailwayStatus-Extension"
   },
   "main": "./dist/extension.js",
   "activationEvents": [],
