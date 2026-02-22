@@ -6,6 +6,7 @@ import {
   RAILWAY_OAUTH_TOKEN_URL,
   OAUTH_SCOPES,
   OAUTH_CALLBACK_PATH,
+  OAUTH_CALLBACK_PORT,
 } from '../constants';
 import { TokenStore } from './tokenStore';
 
@@ -58,10 +59,10 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     const { codeVerifier, codeChallenge } = generatePKCE();
     const state = crypto.randomBytes(16).toString('hex');
 
-    // Start callback server first to get the port
+    // Start callback server on fixed port
     const callback = this.startCallbackServer(state);
-    const port = await callback.port;
-    const redirectUri = `http://localhost:${port}${OAUTH_CALLBACK_PATH}`;
+    await callback.ready;
+    const redirectUri = `http://localhost:${OAUTH_CALLBACK_PORT}${OAUTH_CALLBACK_PATH}`;
 
     // Build auth URL and open browser
     const authUrl = new URL(RAILWAY_OAUTH_AUTH_URL);
@@ -125,12 +126,13 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 
-  private startCallbackServer(expectedState: string): { port: Promise<number>; code: Promise<string> } {
-    let resolvePort: (port: number) => void;
+  private startCallbackServer(expectedState: string): { ready: Promise<void>; code: Promise<string> } {
+    let resolveReady: () => void;
+    let rejectReady: (err: Error) => void;
     let resolveCode: (code: string) => void;
     let rejectCode: (err: Error) => void;
 
-    const portPromise = new Promise<number>((res) => { resolvePort = res; });
+    const readyPromise = new Promise<void>((res, rej) => { resolveReady = res; rejectReady = rej; });
     const codePromise = new Promise<string>((res, rej) => {
       resolveCode = res;
       rejectCode = rej;
@@ -178,11 +180,16 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
       resolveCode(code);
     });
 
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      if (address && typeof address !== 'string') {
-        resolvePort!(address.port);
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        rejectReady!(new Error(`Port ${OAUTH_CALLBACK_PORT} is already in use. Close any other application using this port and try again.`));
+      } else {
+        rejectReady!(err);
       }
+    });
+
+    server.listen(OAUTH_CALLBACK_PORT, '127.0.0.1', () => {
+      resolveReady!();
     });
 
     // Timeout after 2 minutes
@@ -191,7 +198,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
       rejectCode!(new Error('OAuth callback timed out'));
     }, 120_000);
 
-    return { port: portPromise, code: codePromise };
+    return { ready: readyPromise, code: codePromise };
   }
 
   async loginWithToken(): Promise<void> {

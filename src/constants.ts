@@ -4,6 +4,7 @@ export const RAILWAY_OAUTH_TOKEN_URL = 'https://backboard.railway.com/oauth/toke
 
 export const OAUTH_SCOPES = 'openid email profile offline_access';
 export const OAUTH_CALLBACK_PATH = '/callback';
+export const OAUTH_CALLBACK_PORT = 9876;
 
 export const SECRET_KEY_ACCESS_TOKEN = 'railway.accessToken';
 export const SECRET_KEY_REFRESH_TOKEN = 'railway.refreshToken';
