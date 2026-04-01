@@ -3,7 +3,10 @@ import { RailwayAuthProvider } from './auth/railwayAuth';
 import { TokenStore } from './auth/tokenStore';
 import { RailwayApiClient } from './api/client';
 import { RailwayTreeDataProvider, type SortMode } from './views/treeProvider';
-import { ProjectNode, WorkspaceNode } from './views/nodes';
+import { ProjectNode, EnvironmentNode, WorkspaceNode } from './views/nodes';
+import { LogViewer } from './views/logViewer';
+import { ServiceDetailPanel } from './views/serviceDetailPanel';
+import { ServiceNode } from './views/nodes';
 
 export async function activate(context: vscode.ExtensionContext) {
   const tokenStore = new TokenStore(context.secrets);
@@ -24,7 +27,10 @@ export async function activate(context: vscode.ExtensionContext) {
     },
   });
 
+  const logViewer = new LogViewer(apiClient);
   const treeProvider = new RailwayTreeDataProvider(apiClient);
+  treeProvider.initState(context.globalState, context.workspaceState);
+
   const treeView = vscode.window.createTreeView('railwayStatus', {
     treeDataProvider: treeProvider,
     showCollapseAll: true,
@@ -54,6 +60,9 @@ export async function activate(context: vscode.ExtensionContext) {
     if (e.element instanceof ProjectNode) {
       treeProvider.pollingManager.removeProject(e.element.projectId);
     }
+    if (e.element instanceof EnvironmentNode) {
+      treeProvider.pollingManager.removeProject(`${e.element.projectId}:${e.element.environmentId}`);
+    }
     if (e.element instanceof WorkspaceNode) {
       treeProvider.pollingManager.removeProjectsByWorkspace(e.element.workspaceId);
     }
@@ -67,7 +76,9 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     treeView,
     authProvider,
+    logViewer,
     treeProvider.pollingManager,
+    treeProvider.statusBar,
 
     vscode.commands.registerCommand('railway.login', async () => {
       try {
@@ -131,6 +142,146 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('railway.disableAutoRefresh', async () => {
       treeProvider.pollingManager.setEnabled(false);
       await vscode.commands.executeCommand('setContext', 'railway.autoRefreshEnabled', false);
+    }),
+
+    vscode.commands.registerCommand('railway.serviceDetail', async (node) => {
+      if (!node?.serviceId || !node?.deployment?.environmentId) {
+        return;
+      }
+      await ServiceDetailPanel.show(context.extensionUri, apiClient, {
+        serviceName: node.serviceName,
+        serviceId: node.serviceId,
+        projectId: node.projectId,
+        environmentId: node.deployment.environmentId,
+        environmentName: node.deployment.environmentName ?? 'Unknown',
+      });
+    }),
+
+    vscode.commands.registerCommand('railway.viewLogs', async (node) => {
+      if (!node?.deployment?.id) {
+        vscode.window.showWarningMessage('No deployment logs available');
+        return;
+      }
+      await logViewer.showLogs(node.serviceName, node.deployment.id);
+    }),
+
+    vscode.commands.registerCommand('railway.redeploy', async (node) => {
+      if (!node?.deployment?.id) {
+        vscode.window.showWarningMessage('No deployment to redeploy');
+        return;
+      }
+      const confirm = await vscode.window.showWarningMessage(
+        `Redeploy "${node.serviceName}"?`, { modal: true }, 'Redeploy'
+      );
+      if (confirm === 'Redeploy') {
+        try {
+          await apiClient.redeployDeployment(node.deployment.id);
+          vscode.window.showInformationMessage(`Redeploying ${node.serviceName}...`);
+          treeProvider.refresh();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          vscode.window.showErrorMessage(`Redeploy failed: ${msg}`);
+        }
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.restart', async (node) => {
+      if (!node?.deployment?.id) {
+        vscode.window.showWarningMessage('No deployment to restart');
+        return;
+      }
+      const confirm = await vscode.window.showWarningMessage(
+        `Restart "${node.serviceName}"?`, { modal: true }, 'Restart'
+      );
+      if (confirm === 'Restart') {
+        try {
+          await apiClient.restartDeployment(node.deployment.id);
+          vscode.window.showInformationMessage(`Restarting ${node.serviceName}...`);
+          treeProvider.refresh();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          vscode.window.showErrorMessage(`Restart failed: ${msg}`);
+        }
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.viewVariables', async (node) => {
+      if (!node?.serviceId || !node?.deployment?.environmentId) {
+        vscode.window.showWarningMessage('Select a service with a deployment to view variables');
+        return;
+      }
+      try {
+        const vars = await apiClient.getVariables(node.projectId, node.deployment.environmentId, node.serviceId);
+        const names = Object.keys(vars).sort();
+        if (names.length === 0) {
+          vscode.window.showInformationMessage('No environment variables configured');
+          return;
+        }
+        const picked = await vscode.window.showQuickPick(
+          names.map((n) => ({ label: n, description: '••••••••' })),
+          { placeHolder: 'Select variable to copy value' }
+        );
+        if (picked) {
+          await vscode.env.clipboard.writeText(vars[picked.label]);
+          vscode.window.showInformationMessage(`Copied ${picked.label} value to clipboard`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        vscode.window.showErrorMessage(`Failed to load variables: ${msg}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.addVariable', async (node) => {
+      if (!node?.serviceId || !node?.deployment?.environmentId) {
+        vscode.window.showWarningMessage('Select a service with a deployment');
+        return;
+      }
+      const name = await vscode.window.showInputBox({ prompt: 'Variable name', placeHolder: 'MY_VARIABLE' });
+      if (!name) { return; }
+      const value = await vscode.window.showInputBox({ prompt: `Value for ${name}`, password: true });
+      if (value === undefined) { return; }
+      try {
+        await apiClient.upsertVariable(node.projectId, node.deployment.environmentId, node.serviceId, name, value);
+        vscode.window.showInformationMessage(`Variable ${name} set successfully`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        vscode.window.showErrorMessage(`Failed to set variable: ${msg}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.exportEnv', async (node) => {
+      if (!node?.serviceId || !node?.deployment?.environmentId) {
+        vscode.window.showWarningMessage('Select a service with a deployment');
+        return;
+      }
+      try {
+        const vars = await apiClient.getVariables(node.projectId, node.deployment.environmentId, node.serviceId);
+        const content = Object.entries(vars).sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => `${k}=${v}`).join('\n');
+        const uri = await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file('.env'),
+          filters: { 'Environment files': ['env'], 'All files': ['*'] },
+        });
+        if (uri) {
+          await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf-8'));
+          vscode.window.showInformationMessage(`Exported ${Object.keys(vars).length} variables to ${uri.fsPath}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        vscode.window.showErrorMessage(`Failed to export variables: ${msg}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.linkProject', async (node) => {
+      if (node?.projectId) {
+        treeProvider.linkProject(node.projectId);
+        vscode.window.showInformationMessage(`Linked to project "${node.projectName}"`);
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.unlinkProject', async () => {
+      treeProvider.unlinkProject();
+      vscode.window.showInformationMessage('Project unlinked');
     }),
 
     vscode.commands.registerCommand('railway.logout', async () => {

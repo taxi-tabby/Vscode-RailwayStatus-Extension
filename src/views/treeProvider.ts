@@ -1,16 +1,17 @@
 import * as vscode from 'vscode';
 import { RailwayApiClient } from '../api/client';
 import { ACTIVE_DEPLOYMENT_STATUSES, POLLING_ACTIVE_INTERVAL, POLLING_IDLE_INTERVAL } from '../constants';
-import { WorkspaceNode, ProjectNode, ServiceNode, type RailwayNode } from './nodes';
+import { WorkspaceNode, ProjectNode, EnvironmentNode, ServiceNode, type RailwayNode } from './nodes';
 import { PollingManager } from './pollingManager';
+import { RailwayStatusBar } from './statusBar';
+import { NotificationManager, type DeploymentChange } from './notificationManager';
 import type { RailwayDeployment } from '../types';
 
 export type SortMode = 'name' | 'createdAsc' | 'updatedDesc';
 
-interface ServiceDetailCache {
+interface ProjectDetailCache {
   services: Array<{ id: string; name: string }>;
-  defaultEnvId: string;
-  defaultEnvName: string;
+  environments: Array<{ id: string; name: string }>;
 }
 
 export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayNode> {
@@ -21,10 +22,13 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
 
   // Polling support
   private projectNodeMap = new Map<string, ProjectNode>();
-  private serviceDetailCache = new Map<string, ServiceDetailCache>();
+  private projectDetailCache = new Map<string, ProjectDetailCache>();
   private lastDeploymentSnapshots = new Map<string, string>();
   private treeView: vscode.TreeView<RailwayNode> | undefined;
   readonly pollingManager: PollingManager;
+  readonly statusBar = new RailwayStatusBar();
+  private readonly notificationManager = new NotificationManager();
+  private globalState!: vscode.Memento;
 
   constructor(private apiClient: RailwayApiClient) {
     const config = vscode.workspace.getConfiguration('railway');
@@ -38,19 +42,47 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
     );
   }
 
+  private workspaceState!: vscode.Memento;
+  private linkedProjectId: string | undefined;
+
+  /** Must be called after construction to restore persisted settings */
+  initState(globalState: vscode.Memento, workspaceState: vscode.Memento): void {
+    this.globalState = globalState;
+    this.workspaceState = workspaceState;
+    this.sortMode = globalState.get<SortMode>('railway.sortMode', 'name');
+    this.linkedProjectId = workspaceState.get<string>('railway.linkedProjectId');
+  }
+
+  linkProject(projectId: string): void {
+    this.linkedProjectId = projectId;
+    this.workspaceState?.update('railway.linkedProjectId', projectId);
+    this._onDidChangeTreeData.fire();
+  }
+
+  unlinkProject(): void {
+    this.linkedProjectId = undefined;
+    this.workspaceState?.update('railway.linkedProjectId', undefined);
+    this._onDidChangeTreeData.fire();
+  }
+
+  getLinkedProjectId(): string | undefined {
+    return this.linkedProjectId;
+  }
+
   setTreeView(treeView: vscode.TreeView<RailwayNode>): void {
     this.treeView = treeView;
   }
 
   setSortMode(mode: SortMode): void {
     this.sortMode = mode;
+    this.globalState?.update('railway.sortMode', mode);
     this._onDidChangeTreeData.fire();
   }
 
   refresh(): void {
     this.projectsByWorkspace.clear();
     this.projectNodeMap.clear();
-    this.serviceDetailCache.clear();
+    this.projectDetailCache.clear();
     this.lastDeploymentSnapshots.clear();
     this.pollingManager.clearAll();
     this._onDidChangeTreeData.fire();
@@ -71,7 +103,11 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
     }
 
     if (element instanceof ProjectNode) {
-      return this.getServices(element.projectId);
+      return this.getEnvironments(element.projectId, element.workspaceId);
+    }
+
+    if (element instanceof EnvironmentNode) {
+      return this.getServices(element.projectId, element.environmentId, element.environmentName);
     }
 
     return [];
@@ -106,80 +142,83 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
         break;
     }
 
-    const nodes = projects.map(
-      (proj) => new ProjectNode(proj.id, proj.name, workspaceId, undefined, proj.createdAt, proj.updatedAt)
-    );
+    // Pin linked project to top
+    if (this.linkedProjectId) {
+      const idx = projects.findIndex((p) => p.id === this.linkedProjectId);
+      if (idx > 0) {
+        const [linked] = projects.splice(idx, 1);
+        projects.unshift(linked);
+      }
+    }
+
+    const nodes = projects.map((proj) => {
+      const isLinked = proj.id === this.linkedProjectId;
+      return new ProjectNode(proj.id, proj.name, workspaceId, undefined, proj.createdAt, proj.updatedAt, isLinked);
+    });
     for (const node of nodes) {
       this.projectNodeMap.set(node.projectId, node);
     }
     return nodes;
   }
 
-  private async getServices(projectId: string): Promise<ServiceNode[]> {
+  private async getEnvironments(projectId: string, workspaceId: string): Promise<EnvironmentNode[]> {
     try {
       const detail = await this.apiClient.getProjectDetail(projectId);
-      const defaultEnv = detail.environments[0];
 
-      // Cache service/environment info for polling
-      if (defaultEnv) {
-        this.serviceDetailCache.set(projectId, {
-          services: detail.services,
-          defaultEnvId: defaultEnv.id,
-          defaultEnvName: defaultEnv.name,
-        });
-      }
+      // Cache for polling
+      this.projectDetailCache.set(projectId, {
+        services: detail.services,
+        environments: detail.environments,
+      });
 
-      // Fetch all deployments in parallel
-      let deployments: Array<RailwayDeployment | undefined> = [];
-      if (defaultEnv) {
-        deployments = await Promise.all(
-          detail.services.map((svc) =>
-            this.apiClient.getLatestDeployment(projectId, svc.id, defaultEnv.id)
-          )
-        );
-      }
+      // Sort: production first, then alphabetically
+      const sorted = [...detail.environments].sort((a, b) => {
+        const aIsProd = /production/i.test(a.name) ? 0 : 1;
+        const bIsProd = /production/i.test(b.name) ? 0 : 1;
+        return aIsProd - bIsProd || a.name.localeCompare(b.name);
+      });
 
-      const serviceNodes: ServiceNode[] = detail.services.map((svc, i) => {
+      return sorted.map(
+        (env) => new EnvironmentNode(env.id, env.name, projectId, workspaceId)
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      vscode.window.showErrorMessage(`Failed to load environments: ${message}`);
+      return [];
+    }
+  }
+
+  private async getServices(projectId: string, environmentId: string, environmentName: string): Promise<ServiceNode[]> {
+    try {
+      const cached = this.projectDetailCache.get(projectId);
+      const services = cached?.services ?? (await this.apiClient.getProjectDetail(projectId)).services;
+
+      const deployments = await Promise.all(
+        services.map((svc) =>
+          this.apiClient.getLatestDeployment(projectId, svc.id, environmentId)
+        )
+      );
+
+      const serviceNodes: ServiceNode[] = services.map((svc, i) => {
         const deployment = deployments[i];
-        if (deployment && defaultEnv) {
-          deployment.environmentName = defaultEnv.name;
+        if (deployment) {
+          deployment.environmentName = environmentName;
+          deployment.environmentId = environmentId;
         }
         return new ServiceNode(svc.id, svc.name, projectId, deployment);
       });
 
-      // Track active deployment status for polling interval
+      // Track active deployment status for polling
+      const snapshotKey = `${projectId}:${environmentId}`;
       const hasActive = serviceNodes.some(
         (n) => n.deployment && ACTIVE_DEPLOYMENT_STATUSES.has(n.deployment.status)
       );
-      this.pollingManager.updateProjectStatus(projectId, hasActive);
-
-      // Save deployment snapshot for change detection
-      this.saveDeploymentSnapshot(projectId, serviceNodes);
-
-      // Update view description
+      this.pollingManager.updateProjectStatus(snapshotKey, hasActive);
+      this.saveDeploymentSnapshot(snapshotKey, serviceNodes);
       this.updateActiveCount();
 
       // Sort
-      switch (this.sortMode) {
-        case 'name':
-          serviceNodes.sort((a, b) => a.serviceName.localeCompare(b.serviceName));
-          break;
-        case 'createdAsc':
-          serviceNodes.sort((a, b) => {
-            const tA = a.deployment?.createdAt ? new Date(a.deployment.createdAt).getTime() : 0;
-            const tB = b.deployment?.createdAt ? new Date(b.deployment.createdAt).getTime() : 0;
-            return tA - tB;
-          });
-          break;
-        case 'updatedDesc':
-          serviceNodes.sort((a, b) => {
-            const tA = a.deployment?.createdAt ? new Date(a.deployment.createdAt).getTime() : 0;
-            const tB = b.deployment?.createdAt ? new Date(b.deployment.createdAt).getTime() : 0;
-            return tB - tA;
-          });
-          break;
-      }
-
+      this.sortServiceNodes(serviceNodes);
       return serviceNodes;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
@@ -188,46 +227,78 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
     }
   }
 
-  /** Poll a single project: reuse cached services, only re-fetch deployments */
+  private sortServiceNodes(nodes: ServiceNode[]): void {
+    switch (this.sortMode) {
+      case 'name':
+        nodes.sort((a, b) => a.serviceName.localeCompare(b.serviceName));
+        break;
+      case 'createdAsc':
+        nodes.sort((a, b) => {
+          const tA = a.deployment?.createdAt ? new Date(a.deployment.createdAt).getTime() : 0;
+          const tB = b.deployment?.createdAt ? new Date(b.deployment.createdAt).getTime() : 0;
+          return tA - tB;
+        });
+        break;
+      case 'updatedDesc':
+        nodes.sort((a, b) => {
+          const tA = a.deployment?.createdAt ? new Date(a.deployment.createdAt).getTime() : 0;
+          const tB = b.deployment?.createdAt ? new Date(b.deployment.createdAt).getTime() : 0;
+          return tB - tA;
+        });
+        break;
+    }
+  }
+
+  /** Poll a single project: re-fetch deployments for all cached environments */
   private async pollProject(projectId: string): Promise<void> {
-    const cached = this.serviceDetailCache.get(projectId);
-    if (!cached) { return; } // never loaded yet, skip
+    const cached = this.projectDetailCache.get(projectId);
+    if (!cached) { return; }
 
     try {
-      const deployments = await Promise.all(
-        cached.services.map((svc) =>
-          this.apiClient.getLatestDeployment(projectId, svc.id, cached.defaultEnvId)
-        )
-      );
+      let changed = false;
+      const allChanges: DeploymentChange[] = [];
 
-      const serviceNodes = cached.services.map((svc, i) => {
-        const deployment = deployments[i];
-        if (deployment) {
-          deployment.environmentName = cached.defaultEnvName;
+      for (const env of cached.environments) {
+        const snapshotKey = `${projectId}:${env.id}`;
+        const deployments = await Promise.all(
+          cached.services.map((svc) =>
+            this.apiClient.getLatestDeployment(projectId, svc.id, env.id)
+          )
+        );
+
+        const serviceNodes = cached.services.map((svc, i) => {
+          const deployment = deployments[i];
+          if (deployment) { deployment.environmentName = env.name; }
+          return new ServiceNode(svc.id, svc.name, projectId, deployment);
+        });
+
+        const oldSnapshot = this.lastDeploymentSnapshots.get(snapshotKey);
+        const newSnapshot = this.buildSnapshot(serviceNodes);
+        if (oldSnapshot !== newSnapshot) {
+          if (oldSnapshot) {
+            allChanges.push(...this.detectChanges(projectId, oldSnapshot, newSnapshot));
+          }
+          this.lastDeploymentSnapshots.set(snapshotKey, newSnapshot);
+          changed = true;
         }
-        return new ServiceNode(svc.id, svc.name, projectId, deployment);
-      });
 
-      // Check if anything changed
-      const oldSnapshot = this.lastDeploymentSnapshots.get(projectId);
-      const newSnapshot = this.buildSnapshot(serviceNodes);
-      if (oldSnapshot === newSnapshot) { return; } // no change
+        const hasActive = serviceNodes.some(
+          (n) => n.deployment && ACTIVE_DEPLOYMENT_STATUSES.has(n.deployment.status)
+        );
+        this.pollingManager.updateProjectStatus(snapshotKey, hasActive);
+      }
 
-      this.lastDeploymentSnapshots.set(projectId, newSnapshot);
+      if (changed) {
+        const projectNode = this.projectNodeMap.get(projectId);
+        this._onDidChangeTreeData.fire(projectNode);
+        this.updateActiveCount();
+      }
 
-      // Update active status
-      const hasActive = serviceNodes.some(
-        (n) => n.deployment && ACTIVE_DEPLOYMENT_STATUSES.has(n.deployment.status)
-      );
-      this.pollingManager.updateProjectStatus(projectId, hasActive);
-
-      // Partial tree refresh
-      const projectNode = this.projectNodeMap.get(projectId);
-      this._onDidChangeTreeData.fire(projectNode);
-
-      this.updateActiveCount();
+      if (allChanges.length > 0) {
+        this.notificationManager.notify(allChanges);
+      }
     } catch {
-      // Silently ignore polling errors to avoid spamming the user
+      // Silently ignore polling errors
     }
   }
 
@@ -239,17 +310,46 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
     const data = serviceNodes.map((n) => ({
       id: n.deployment?.id,
       status: n.deployment?.status,
+      name: n.serviceName,
     }));
     return JSON.stringify(data);
   }
 
+  private detectChanges(projectId: string, oldSnapshot: string, newSnapshot: string): DeploymentChange[] {
+    const oldEntries = JSON.parse(oldSnapshot) as Array<{ id?: string; status?: string; name?: string }>;
+    const newEntries = JSON.parse(newSnapshot) as Array<{ id?: string; status?: string; name?: string }>;
+    const changes: DeploymentChange[] = [];
+
+    for (let i = 0; i < newEntries.length; i++) {
+      const oldStatus = oldEntries[i]?.status;
+      const newStatus = newEntries[i]?.status;
+      if (newStatus && oldStatus !== newStatus) {
+        changes.push({
+          serviceName: newEntries[i].name ?? 'Unknown',
+          projectId,
+          oldStatus,
+          newStatus,
+        });
+      }
+    }
+    return changes;
+  }
+
   private updateActiveCount(): void {
-    let count = 0;
+    let deploying = 0;
+    let failed = 0;
+    let success = 0;
     for (const snapshot of this.lastDeploymentSnapshots.values()) {
       const entries = JSON.parse(snapshot) as Array<{ id?: string; status?: string }>;
-      count += entries.filter((e) => e.status && ACTIVE_DEPLOYMENT_STATUSES.has(e.status)).length;
+      for (const e of entries) {
+        if (!e.status) { continue; }
+        if (ACTIVE_DEPLOYMENT_STATUSES.has(e.status)) { deploying++; }
+        else if (e.status === 'FAILED' || e.status === 'CRASHED') { failed++; }
+        else if (e.status === 'SUCCESS') { success++; }
+      }
     }
-    this.updateViewDescription(count);
+    this.updateViewDescription(deploying);
+    this.statusBar.update({ deploying, failed, success });
   }
 
   private updateViewDescription(activeCount: number): void {

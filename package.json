@@ -2,7 +2,7 @@
   "name": "railway-status",
   "displayName": "Railway Status",
   "description": "View Railway.com deployment statuses directly in VS Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "taxi-tabby",
   "icon": "icon.png",
   "license": "MIT",
@@ -93,6 +93,60 @@
         "command": "railway.logout",
         "title": "Sign Out",
         "category": "Railway"
+      },
+      {
+        "command": "railway.redeploy",
+        "title": "Redeploy",
+        "category": "Railway",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "railway.restart",
+        "title": "Restart",
+        "category": "Railway",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "railway.serviceDetail",
+        "title": "View Service Details",
+        "category": "Railway",
+        "icon": "$(info)"
+      },
+      {
+        "command": "railway.viewVariables",
+        "title": "View Variables",
+        "category": "Railway",
+        "icon": "$(symbol-variable)"
+      },
+      {
+        "command": "railway.addVariable",
+        "title": "Add Variable",
+        "category": "Railway",
+        "icon": "$(add)"
+      },
+      {
+        "command": "railway.exportEnv",
+        "title": "Export .env File",
+        "category": "Railway",
+        "icon": "$(export)"
+      },
+      {
+        "command": "railway.linkProject",
+        "title": "Link to Workspace",
+        "category": "Railway",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "railway.unlinkProject",
+        "title": "Unlink Project",
+        "category": "Railway",
+        "icon": "$(pinned-dirty)"
+      },
+      {
+        "command": "railway.viewLogs",
+        "title": "View Logs",
+        "category": "Railway",
+        "icon": "$(output)"
       }
     ],
     "menus": {
@@ -125,12 +179,53 @@
           "group": "inline"
         },
         {
+          "command": "railway.redeploy",
+          "when": "viewItem == railwayService",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "railway.restart",
+          "when": "viewItem == railwayService",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "railway.viewLogs",
+          "when": "viewItem == railwayService",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "railway.viewVariables",
+          "when": "viewItem == railwayService",
+          "group": "1_actions@4"
+        },
+        {
+          "command": "railway.addVariable",
+          "when": "viewItem == railwayService",
+          "group": "1_actions@5"
+        },
+        {
+          "command": "railway.exportEnv",
+          "when": "viewItem == railwayService",
+          "group": "1_actions@6"
+        },
+        {
           "command": "railway.copyUrl",
-          "when": "viewItem == railwayService"
+          "when": "viewItem == railwayService",
+          "group": "2_copy"
         },
         {
           "command": "railway.openInBrowser",
-          "when": "viewItem == railwayProject"
+          "when": "viewItem == railwayProject || viewItem == railwayProjectLinked"
+        },
+        {
+          "command": "railway.linkProject",
+          "when": "viewItem == railwayProject",
+          "group": "3_link"
+        },
+        {
+          "command": "railway.unlinkProject",
+          "when": "viewItem == railwayProjectLinked",
+          "group": "3_link"
         }
       ]
     },
@@ -159,6 +254,11 @@
           "default": 30,
           "minimum": 10,
           "description": "Polling interval (seconds) when all deployments are stable."
+        },
+        "railway.notifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications when deployment status changes (success, failure, crash)."
         }
       }
     }

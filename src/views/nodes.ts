@@ -3,7 +3,7 @@ import { STATUS_ICONS } from '../constants';
 import { formatRelativeTime } from '../utils/timeFormat';
 import type { RailwayDeployment } from '../types';
 
-export type RailwayNode = WorkspaceNode | ProjectNode | ServiceNode;
+export type RailwayNode = WorkspaceNode | ProjectNode | EnvironmentNode | ServiceNode;
 
 export class WorkspaceNode extends vscode.TreeItem {
   readonly type = 'workspace' as const;
@@ -27,14 +27,36 @@ export class ProjectNode extends vscode.TreeItem {
     public readonly workspaceId: string,
     serviceCount?: number,
     public readonly createdAt?: string,
-    public readonly updatedAt?: string
+    public readonly updatedAt?: string,
+    public readonly isLinked?: boolean
   ) {
     super(projectName, vscode.TreeItemCollapsibleState.Collapsed);
-    this.iconPath = new vscode.ThemeIcon('package');
-    this.contextValue = 'railwayProject';
+    if (isLinked) {
+      this.iconPath = new vscode.ThemeIcon('pinned');
+      this.contextValue = 'railwayProjectLinked';
+      this.description = 'linked';
+    } else {
+      this.iconPath = new vscode.ThemeIcon('package');
+      this.contextValue = 'railwayProject';
+    }
     if (serviceCount !== undefined) {
       this.description = `${serviceCount} service${serviceCount !== 1 ? 's' : ''}`;
     }
+  }
+}
+
+export class EnvironmentNode extends vscode.TreeItem {
+  readonly type = 'environment' as const;
+
+  constructor(
+    public readonly environmentId: string,
+    public readonly environmentName: string,
+    public readonly projectId: string,
+    public readonly workspaceId: string
+  ) {
+    super(environmentName, vscode.TreeItemCollapsibleState.Collapsed);
+    this.iconPath = new vscode.ThemeIcon('server-environment');
+    this.contextValue = 'railwayEnvironment';
   }
 }
 
@@ -50,6 +72,12 @@ export class ServiceNode extends vscode.TreeItem {
     super(serviceName, vscode.TreeItemCollapsibleState.None);
     this.contextValue = 'railwayService';
 
+    this.command = {
+      command: 'railway.serviceDetail',
+      title: 'View Service Details',
+      arguments: [this],
+    };
+
     if (deployment) {
       const status = deployment.status;
       const iconId = STATUS_ICONS[status] ?? 'question';
@@ -57,9 +85,6 @@ export class ServiceNode extends vscode.TreeItem {
 
       const parts: string[] = [];
       parts.push(formatRelativeTime(deployment.createdAt));
-      if (deployment.environmentName) {
-        parts.push(deployment.environmentName);
-      }
       this.description = parts.join(' \u2022 ');
 
       const tooltipLines = [`Status: ${status}`];
