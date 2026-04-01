@@ -2,7 +2,7 @@
   "name": "railway-status",
   "displayName": "Railway Status",
   "description": "View Railway.com deployment statuses directly in VS Code",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "taxi-tabby",
   "icon": "icon.png",
   "license": "MIT",
@@ -38,7 +38,7 @@
     "viewsWelcome": [
       {
         "view": "railwayStatus",
-        "contents": "Sign in to Railway to view your projects.\n[Sign in with Railway](command:railway.login)\n[Use API Token](command:railway.loginWithToken)",
+        "contents": "Sign in to Railway to view your projects.\n[Sign in with Railway](command:railway.login)\n[Use API Token](command:railway.loginWithToken)\n\nOAuth requires a Client ID. [Setup guide](https://docs.railway.com/reference/oauth/creating-an-app)",
         "when": "!railway.authenticated"
       }
     ],
@@ -238,6 +238,11 @@
     "configuration": {
       "title": "Railway Status",
       "properties": {
+        "railway.oauthClientId": {
+          "type": "string",
+          "default": "",
+          "description": "OAuth Client ID from your Railway OAuth app (Settings > Developer > New OAuth App). Redirect URI: http://127.0.0.1:9876/callback"
+        },
         "railway.autoRefresh": {
           "type": "boolean",
           "default": true,

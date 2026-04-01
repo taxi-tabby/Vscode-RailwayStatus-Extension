@@ -4,15 +4,15 @@ import * as crypto from 'node:crypto';
 import {
   RAILWAY_OAUTH_AUTH_URL,
   RAILWAY_OAUTH_TOKEN_URL,
-  RAILWAY_OAUTH_CLIENT_ID,
   RAILWAY_OAUTH_SCOPES,
+  OAUTH_CALLBACK_PORT,
+  OAUTH_CALLBACK_PATH,
 } from '../constants';
 import { TokenStore } from './tokenStore';
 
 const AUTH_PROVIDER_ID = 'railway';
 const AUTH_PROVIDER_LABEL = 'Railway';
-const CALLBACK_PATH = '/callback';
-const AUTH_TIMEOUT_MS = 300_000; // 5 minutes (matching CLI)
+const AUTH_TIMEOUT_MS = 300_000; // 5 minutes
 
 export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscode.Disposable {
   private _onDidChangeSessions = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
@@ -50,24 +50,28 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
   }
 
   async createSession(_scopes: string[]): Promise<vscode.AuthenticationSession> {
-    const { port, server, codePromise } = await this.startCallbackServer();
-    const redirectUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
+    const clientId = this.getClientId();
+    if (!clientId) {
+      await this.promptOAuthSetup();
+      throw new Error('OAuth Client ID not configured. Please set it in settings first.');
+    }
 
-    // Generate PKCE parameters
+    const { port, server, codePromise } = await this.startCallbackServer();
+    const redirectUri = `http://127.0.0.1:${port}${OAUTH_CALLBACK_PATH}`;
+
+    // Generate PKCE parameters (required for native apps)
     const codeVerifier = generateCodeVerifier();
     const codeChallenge = generateCodeChallenge(codeVerifier);
     const state = generateState();
 
-    // Build authorization URL (matching Railway CLI's OAuth flow)
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: RAILWAY_OAUTH_CLIENT_ID,
+      client_id: clientId,
       redirect_uri: redirectUri,
       scope: RAILWAY_OAUTH_SCOPES,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
       state,
-      prompt: 'consent',
     });
 
     const authUrl = `${RAILWAY_OAUTH_AUTH_URL}?${params.toString()}`;
@@ -76,13 +80,12 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     try {
       const { code, receivedState } = await codePromise;
 
-      // Validate state to prevent CSRF
       if (receivedState !== state) {
         throw new Error('State mismatch — possible CSRF attack');
       }
 
-      // Exchange authorization code for tokens
-      const tokenResponse = await this.exchangeCodeForToken(code, redirectUri, codeVerifier);
+      // Native apps: no client_secret, PKCE only
+      const tokenResponse = await this.exchangeCodeForToken(clientId, code, redirectUri, codeVerifier);
       await this.tokenStore.storeAccessToken(tokenResponse.access_token);
 
       const session: vscode.AuthenticationSession = {
@@ -104,16 +107,39 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 
+  private getClientId(): string | undefined {
+    return vscode.workspace.getConfiguration('railway').get<string>('oauthClientId');
+  }
+
+  private async promptOAuthSetup(): Promise<void> {
+    const choice = await vscode.window.showWarningMessage(
+      'Railway OAuth Client ID is not configured. You need to create an OAuth app in Railway first, or use an API Token instead.',
+      'Open Railway Developer Settings',
+      'Use API Token',
+      'Open Setup Guide'
+    );
+
+    if (choice === 'Open Railway Developer Settings') {
+      await vscode.env.openExternal(vscode.Uri.parse('https://railway.com/account/developer'));
+    } else if (choice === 'Use API Token') {
+      await vscode.commands.executeCommand('railway.loginWithToken');
+    } else if (choice === 'Open Setup Guide') {
+      await vscode.env.openExternal(vscode.Uri.parse('https://docs.railway.com/reference/oauth/creating-an-app'));
+    }
+  }
+
   private async exchangeCodeForToken(
+    clientId: string,
     code: string,
     redirectUri: string,
     codeVerifier: string
   ): Promise<{ access_token: string }> {
+    // Native app: no client_secret, use PKCE code_verifier
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
       redirect_uri: redirectUri,
-      client_id: RAILWAY_OAUTH_CLIENT_ID,
+      client_id: clientId,
       code_verifier: codeVerifier,
     });
 
@@ -148,8 +174,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
       const server = http.createServer((req, res) => {
         const url = new URL(req.url ?? '/', `http://localhost`);
 
-        // Only handle the callback path
-        if (url.pathname !== CALLBACK_PATH) {
+        if (url.pathname !== OAUTH_CALLBACK_PATH) {
           res.writeHead(404);
           res.end();
           return;
@@ -159,7 +184,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
         if (error) {
           const description = url.searchParams.get('error_description') ?? error;
           res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-          res.end(buildHtmlPage('Authentication Failed', `Error: ${description}. You can close this tab.`));
+          res.end(buildHtmlPage('Authentication Failed', `Error: ${escapeHtml(description)}. You can close this tab.`));
           rejectCode(new Error(description));
           return;
         }
@@ -182,14 +207,11 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
         rejectStart(err);
       });
 
-      // Listen on random port (port 0 lets the OS assign one)
-      server.listen(0, '127.0.0.1', () => {
-        const addr = server.address();
-        const port = typeof addr === 'object' && addr ? addr.port : 0;
-        resolveStart({ port, server, codePromise });
+      // Fixed port so the redirect URI matches the registered OAuth app
+      server.listen(OAUTH_CALLBACK_PORT, '127.0.0.1', () => {
+        resolveStart({ port: OAUTH_CALLBACK_PORT, server, codePromise });
       });
 
-      // Timeout after 5 minutes
       setTimeout(() => {
         server.close();
         rejectCode!(new Error('Authentication timed out'));
@@ -226,27 +248,24 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
   }
 }
 
-/** Generate a PKCE code verifier (128 chars from unreserved charset) */
 function generateCodeVerifier(): string {
   const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
   const bytes = crypto.randomBytes(128);
   return Array.from(bytes, (b) => charset[b % charset.length]).join('');
 }
 
-/** Generate a PKCE code challenge (S256) from the verifier */
 function generateCodeChallenge(verifier: string): string {
-  return crypto
-    .createHash('sha256')
-    .update(verifier)
-    .digest('base64url'); // base64url = URL-safe, no padding
+  return crypto.createHash('sha256').update(verifier).digest('base64url');
 }
 
-/** Generate a random state parameter for CSRF protection */
 function generateState(): string {
   return crypto.randomBytes(32).toString('base64url');
 }
 
-/** Build a simple HTML response page */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function buildHtmlPage(title: string, message: string): string {
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${title}</title>

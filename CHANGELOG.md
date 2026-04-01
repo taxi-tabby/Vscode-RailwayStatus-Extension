@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+### Fixed
+- OAuth now uses user-registered Railway OAuth app instead of CLI-only Client ID
+- Fixed port 9876 for OAuth callback to match registered redirect URI
+
+### Changed
+- Added `railway.oauthClientId` setting for user's own OAuth app Client ID
+- Show setup guide when OAuth Client ID is not configured
+
 ## 0.2.0
 
 ### Fixed
