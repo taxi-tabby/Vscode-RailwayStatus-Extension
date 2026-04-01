@@ -1,10 +1,14 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import {
   RAILWAY_OAUTH_AUTH_URL,
   RAILWAY_OAUTH_TOKEN_URL,
   RAILWAY_OAUTH_SCOPES,
+  RAILWAY_GRAPHQL_ENDPOINT,
   OAUTH_CALLBACK_PORT,
   OAUTH_CALLBACK_PATH,
 } from '../constants';
@@ -38,67 +42,65 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     if (!token) {
       return [];
     }
-
-    return [
-      {
-        id: 'railway-session',
-        accessToken: token,
-        account: { id: 'railway-user', label: 'Railway User' },
-        scopes: [],
-      },
-    ];
+    return [{
+      id: 'railway-session',
+      accessToken: token,
+      account: { id: 'railway-user', label: 'Railway User' },
+      scopes: [],
+    }];
   }
+
+  // ─── OAuth (requires user-registered Railway OAuth App) ───
 
   async createSession(_scopes: string[]): Promise<vscode.AuthenticationSession> {
     const clientId = this.getClientId();
     if (!clientId) {
       await this.promptOAuthSetup();
-      throw new Error('OAuth Client ID not configured. Please set it in settings first.');
+      throw new Error('OAuth Client ID not configured');
     }
 
-    const { port, server, codePromise } = await this.startCallbackServer();
-    const redirectUri = `http://127.0.0.1:${port}${OAUTH_CALLBACK_PATH}`;
-
-    // Generate PKCE parameters (required for native apps)
-    const codeVerifier = generateCodeVerifier();
-    const codeChallenge = generateCodeChallenge(codeVerifier);
-    const state = generateState();
-
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      scope: RAILWAY_OAUTH_SCOPES,
-      code_challenge: codeChallenge,
-      code_challenge_method: 'S256',
-      state,
-    });
-
-    const authUrl = `${RAILWAY_OAUTH_AUTH_URL}?${params.toString()}`;
-    await vscode.env.openExternal(vscode.Uri.parse(authUrl));
-
+    let server: http.Server | undefined;
     try {
-      const { code, receivedState } = await codePromise;
+      const callback = await this.startCallbackServer();
+      server = callback.server;
+      const redirectUri = `http://127.0.0.1:${callback.port}${OAUTH_CALLBACK_PATH}`;
+
+      const codeVerifier = generateCodeVerifier();
+      const codeChallenge = generateCodeChallenge(codeVerifier);
+      const state = generateState();
+
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: RAILWAY_OAUTH_SCOPES,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+        state,
+      });
+
+      await vscode.env.openExternal(vscode.Uri.parse(`${RAILWAY_OAUTH_AUTH_URL}?${params}`));
+
+      const { code, receivedState } = await callback.codePromise;
 
       if (receivedState !== state) {
-        throw new Error('State mismatch — possible CSRF attack');
+        throw new Error('State parameter mismatch. Authentication aborted for security.');
       }
 
-      // Native apps: no client_secret, PKCE only
       const tokenResponse = await this.exchangeCodeForToken(clientId, code, redirectUri, codeVerifier);
+      if (!tokenResponse.access_token) {
+        throw new Error('Server returned empty access token');
+      }
+
       await this.tokenStore.storeAccessToken(tokenResponse.access_token);
-
-      const session: vscode.AuthenticationSession = {
-        id: 'railway-session',
-        accessToken: tokenResponse.access_token,
-        account: { id: 'railway-user', label: 'Railway User' },
-        scopes: [],
-      };
-
-      this._onDidChangeSessions.fire({ added: [session], removed: [], changed: [] });
-      return session;
+      return this.buildSession(tokenResponse.access_token);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'Authentication timed out') {
+        vscode.window.showWarningMessage('Railway OAuth timed out. Please try again.');
+      }
+      throw err;
     } finally {
-      server.close();
+      server?.close();
     }
   }
 
@@ -107,24 +109,165 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 
+  // ─── API Token (manual input) ───
+
+  async loginWithToken(): Promise<void> {
+    const token = await vscode.window.showInputBox({
+      title: 'Railway: API Token',
+      prompt: 'Paste your Railway API token (Account or Workspace token)',
+      placeHolder: 'e.g. rlwy_xxxxxxxxxxxxxxxxxxxx',
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (value) => {
+        if (!value.trim()) { return 'Token cannot be empty'; }
+        return undefined;
+      },
+    });
+
+    if (!token) { return; }
+
+    const trimmed = token.trim();
+
+    // Validate token by making a test API call
+    const valid = await this.validateToken(trimmed);
+    if (!valid) {
+      vscode.window.showErrorMessage(
+        'Railway: Invalid API token. Please check and try again.\n\nGet your token at: railway.com/account/tokens'
+      );
+      return;
+    }
+
+    await this.tokenStore.storeApiToken(trimmed);
+    this._onDidChangeSessions.fire({ added: [this.buildSession(trimmed)], removed: [], changed: [] });
+    vscode.window.showInformationMessage('Railway: Signed in with API token');
+  }
+
+  // ─── Import from Railway CLI ───
+
+  async loginWithCli(): Promise<void> {
+    const configPath = path.join(os.homedir(), '.railway', 'config.json');
+
+    // Check if config file exists
+    if (!fs.existsSync(configPath)) {
+      const choice = await vscode.window.showWarningMessage(
+        'Railway CLI config not found.\n\nMake sure Railway CLI is installed and you\'ve run "railway login" at least once.',
+        'Install CLI Guide',
+        'Open Terminal'
+      );
+      if (choice === 'Install CLI Guide') {
+        await vscode.env.openExternal(vscode.Uri.parse('https://docs.railway.com/guides/cli'));
+      } else if (choice === 'Open Terminal') {
+        const t = vscode.window.createTerminal('Railway');
+        t.show();
+        t.sendText('echo "Run: railway login"');
+      }
+      return;
+    }
+
+    // Read and parse config
+    let token: string | undefined;
+    try {
+      const raw = fs.readFileSync(configPath, 'utf-8');
+      const config = JSON.parse(raw) as {
+        user?: { accessToken?: string; token?: string };
+      };
+      token = config.user?.accessToken || config.user?.token || undefined;
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Railway: Failed to read CLI config (${configPath}): ${err instanceof Error ? err.message : 'parse error'}`
+      );
+      return;
+    }
+
+    if (!token) {
+      const choice = await vscode.window.showWarningMessage(
+        'Railway CLI is installed but not logged in.\n\nRun "railway login" in your terminal first, then try again.',
+        'Open Terminal'
+      );
+      if (choice === 'Open Terminal') {
+        const t = vscode.window.createTerminal('Railway Login');
+        t.show();
+        t.sendText('railway login');
+      }
+      return;
+    }
+
+    // Validate the token
+    const valid = await this.validateToken(token);
+    if (!valid) {
+      const choice = await vscode.window.showWarningMessage(
+        'Railway CLI token is expired or invalid.\n\nRun "railway login" to refresh your session.',
+        'Open Terminal'
+      );
+      if (choice === 'Open Terminal') {
+        const t = vscode.window.createTerminal('Railway Login');
+        t.show();
+        t.sendText('railway login');
+      }
+      return;
+    }
+
+    await this.tokenStore.storeAccessToken(token);
+    this._onDidChangeSessions.fire({ added: [this.buildSession(token)], removed: [], changed: [] });
+    vscode.window.showInformationMessage('Railway: Signed in using CLI credentials');
+  }
+
+  // ─── Helpers ───
+
+  private buildSession(token: string): vscode.AuthenticationSession {
+    return {
+      id: 'railway-session',
+      accessToken: token,
+      account: { id: 'railway-user', label: 'Railway User' },
+      scopes: [],
+    };
+  }
+
+  /** Validate a token by querying the Railway API */
+  private async validateToken(token: string): Promise<boolean> {
+    try {
+      const res = await fetch(RAILWAY_GRAPHQL_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ query: '{ me { id } }' }),
+      });
+      if (res.status === 401 || res.status === 403) { return false; }
+      if (!res.ok) { return false; }
+      const json = await res.json() as { data?: { me?: { id: string } }; errors?: unknown[] };
+      return !!json.data?.me?.id;
+    } catch {
+      // Network error — give benefit of doubt, let it through
+      return true;
+    }
+  }
+
   private getClientId(): string | undefined {
-    return vscode.workspace.getConfiguration('railway').get<string>('oauthClientId');
+    const id = vscode.workspace.getConfiguration('railway').get<string>('oauthClientId');
+    return id && id.trim() ? id.trim() : undefined;
   }
 
   private async promptOAuthSetup(): Promise<void> {
     const choice = await vscode.window.showWarningMessage(
-      'Railway OAuth Client ID is not configured. You need to create an OAuth app in Railway first, or use an API Token instead.',
-      'Open Railway Developer Settings',
+      'Railway OAuth requires a Client ID.\n\n' +
+      'Setup: railway.com > Workspace Settings > Developer > New OAuth App\n' +
+      '  Type: Native\n' +
+      '  Redirect URI: http://127.0.0.1:9876/callback\n\n' +
+      'Then paste the Client ID in VS Code settings (railway.oauthClientId).\n\n' +
+      'Alternatively, use an API Token or CLI import instead.',
       'Use API Token',
-      'Open Setup Guide'
+      'Import from CLI',
+      'Open OAuth Setup Page'
     );
 
-    if (choice === 'Open Railway Developer Settings') {
-      await vscode.env.openExternal(vscode.Uri.parse('https://railway.com/account/developer'));
-    } else if (choice === 'Use API Token') {
+    if (choice === 'Use API Token') {
       await vscode.commands.executeCommand('railway.loginWithToken');
-    } else if (choice === 'Open Setup Guide') {
-      await vscode.env.openExternal(vscode.Uri.parse('https://docs.railway.com/reference/oauth/creating-an-app'));
+    } else if (choice === 'Import from CLI') {
+      await vscode.commands.executeCommand('railway.loginWithCli');
+    } else if (choice === 'Open OAuth Setup Page') {
+      await vscode.env.openExternal(vscode.Uri.parse('https://railway.com/workspace/developer'));
     }
   }
 
@@ -134,7 +277,6 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     redirectUri: string,
     codeVerifier: string
   ): Promise<{ access_token: string }> {
-    // Native app: no client_secret, use PKCE code_verifier
     const body = new URLSearchParams({
       grant_type: 'authorization_code',
       code,
@@ -143,18 +285,28 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
       code_verifier: codeVerifier,
     });
 
-    const response = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Token exchange failed (${response.status}): ${text}`);
+    let response: Response;
+    try {
+      response = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+    } catch (err) {
+      throw new Error(`Network error during token exchange: ${err instanceof Error ? err.message : 'connection failed'}`);
     }
 
-    return response.json() as Promise<{ access_token: string }>;
+    if (!response.ok) {
+      const text = await response.text().catch(() => '(no response body)');
+      throw new Error(`Token exchange failed (HTTP ${response.status}): ${text}`);
+    }
+
+    const json = await response.json() as { access_token?: string };
+    if (!json.access_token) {
+      throw new Error('Token exchange succeeded but no access_token in response');
+    }
+
+    return json as { access_token: string };
   }
 
   private startCallbackServer(): Promise<{
@@ -172,7 +324,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
       });
 
       const server = http.createServer((req, res) => {
-        const url = new URL(req.url ?? '/', `http://localhost`);
+        const url = new URL(req.url ?? '/', 'http://localhost');
 
         if (url.pathname !== OAUTH_CALLBACK_PATH) {
           res.writeHead(404);
@@ -203,50 +355,36 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
         resolveCode({ code, receivedState });
       });
 
-      server.on('error', (err) => {
-        rejectStart(err);
+      server.on('error', (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE') {
+          rejectStart(new Error(
+            `Port ${OAUTH_CALLBACK_PORT} is in use. Close any other application using it, or try again.`
+          ));
+        } else {
+          rejectStart(new Error(`OAuth callback server error: ${err.message}`));
+        }
       });
 
-      // Fixed port so the redirect URI matches the registered OAuth app
       server.listen(OAUTH_CALLBACK_PORT, '127.0.0.1', () => {
         resolveStart({ port: OAUTH_CALLBACK_PORT, server, codePromise });
       });
 
-      setTimeout(() => {
+      const timeout = setTimeout(() => {
         server.close();
         rejectCode!(new Error('Authentication timed out'));
       }, AUTH_TIMEOUT_MS);
+
+      // Clear timeout if code is resolved
+      codePromise.finally(() => clearTimeout(timeout));
     });
-  }
-
-  async loginWithToken(): Promise<void> {
-    const token = await vscode.window.showInputBox({
-      prompt: 'Enter your Railway API Token',
-      placeHolder: 'Paste your Account or Workspace token here',
-      password: true,
-      ignoreFocusOut: true,
-    });
-
-    if (!token) {
-      return;
-    }
-
-    await this.tokenStore.storeApiToken(token);
-
-    const session: vscode.AuthenticationSession = {
-      id: 'railway-session',
-      accessToken: token,
-      account: { id: 'railway-user', label: 'Railway User' },
-      scopes: [],
-    };
-
-    this._onDidChangeSessions.fire({ added: [session], removed: [], changed: [] });
   }
 
   dispose(): void {
     this._disposables.forEach((d) => d.dispose());
   }
 }
+
+// ─── Utility functions ───
 
 function generateCodeVerifier(): string {
   const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';

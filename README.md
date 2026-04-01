@@ -1,6 +1,6 @@
 # Railway Status
 
-View your [Railway](https://railway.com) deployment statuses directly in VS Code.
+View and manage your [Railway](https://railway.com) deployments directly in VS Code.
 
 ## Features
 
@@ -8,43 +8,66 @@ View your [Railway](https://railway.com) deployment statuses directly in VS Code
 - **Deployment Status** — Real-time status icons (Success, Building, Failed, Crashed, etc.)
 - **Status Bar** — At-a-glance deploying/failed/running counts with color-coded background
 - **Deployment Notifications** — Toast alerts when deployments succeed or fail
-- **Redeploy / Restart** — Right-click a service to redeploy or restart
+- **Redeploy / Restart** — Inline buttons and context menu with confirmation dialogs
 - **Log Viewer** — View build and runtime logs in a VS Code Output Channel
-- **Service Detail Panel** — Click a service to see deployment history and environment variables
-- **Environment Variables** — View, copy, add variables, or export to `.env` file
+- **Service Detail Panel** — Click a service to see deployment history with action buttons
+- **Environment Variable Editor** — Full add/modify/delete with value masking and batch apply
+- **Export .env** — Export environment variables to a `.env` file
 - **Project Linking** — Pin a Railway project to your VS Code workspace
-- **OAuth Sign-in** — Authenticate via browser using Railway's OAuth 2.0 + PKCE
-- **API Token Fallback** — Or paste an API token directly
 - **Persistent Settings** — Sort mode and linked project survive restarts
 
 ## Getting Started
 
 1. Install the extension from the VS Code Marketplace
 2. Click the Railway icon in the activity bar
-3. Sign in with Railway OAuth or enter an API token
+3. Choose a sign-in method (see below)
 4. Expand a workspace to browse your projects
 
-### Authentication
+## Authentication
 
-**OAuth (recommended)** — Click "Sign in with Railway". A browser window opens for Railway's OAuth flow. No extra setup needed.
+Three sign-in methods are available. All tokens are validated before saving.
 
-**API Token** — Create a token at [railway.com/account/tokens](https://railway.com/account/tokens) and use the "Railway: Set API Token" command.
+### API Token (simplest)
+
+1. Go to [railway.com/account/tokens](https://railway.com/account/tokens)
+2. Create a new token
+3. In VS Code, click **"Use API Token"** and paste it
+
+### Import from Railway CLI
+
+If you have the [Railway CLI](https://docs.railway.com/guides/cli) installed and logged in:
+
+1. Run `railway login` in your terminal (if not already logged in)
+2. In VS Code, click **"Import from Railway CLI"**
+3. The extension reads `~/.railway/config.json` automatically
+
+### OAuth (advanced)
+
+Requires registering an OAuth app in Railway:
+
+1. Go to [railway.com/workspace/developer](https://railway.com/workspace/developer)
+2. Click **New OAuth App**
+   - Type: **Native**
+   - Redirect URI: `http://127.0.0.1:9876/callback`
+3. Copy the **Client ID**
+4. In VS Code settings, set `railway.oauthClientId` to the Client ID
+5. Click **"Sign in with OAuth"**
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| Railway: Sign in with Railway | Start OAuth authentication |
 | Railway: Set API Token | Enter an API token manually |
+| Railway: Import from Railway CLI | Import credentials from CLI config |
+| Railway: Sign in with OAuth | Start OAuth authentication (requires setup) |
 | Railway: Refresh | Reload deployment data |
-| Railway: Open in Browser | Open project/service on railway.com |
-| Railway: Copy Service URL | Copy the deployed URL |
 | Railway: Redeploy | Redeploy the latest deployment |
 | Railway: Restart | Restart the current deployment |
 | Railway: View Logs | Show build/runtime logs in Output Channel |
-| Railway: View Variables | Browse and copy environment variables |
-| Railway: Add Variable | Add a new environment variable |
+| Railway: View Variables | Open environment variable editor |
 | Railway: Export .env File | Export variables to a `.env` file |
+| Railway: Open in Browser | Open project/service on railway.com |
+| Railway: Copy Service URL | Copy the deployed URL |
 | Railway: Link to Workspace | Pin a project to the current VS Code workspace |
 | Railway: Unlink Project | Remove the project pin |
 | Railway: Sort By... | Sort projects/services by name, created, or updated |
@@ -54,6 +77,7 @@ View your [Railway](https://railway.com) deployment statuses directly in VS Code
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `railway.oauthClientId` | | (Optional) OAuth Client ID for OAuth sign-in |
 | `railway.autoRefresh` | `true` | Auto-refresh deployment statuses for expanded projects |
 | `railway.autoRefreshActiveInterval` | `10` | Polling interval (seconds) during active deployments |
 | `railway.autoRefreshIdleInterval` | `30` | Polling interval (seconds) when stable |

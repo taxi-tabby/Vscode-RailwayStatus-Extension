@@ -7,6 +7,7 @@ import { ProjectNode, EnvironmentNode, WorkspaceNode } from './views/nodes';
 import { LogViewer } from './views/logViewer';
 import { ServiceDetailPanel } from './views/serviceDetailPanel';
 import { ServiceNode } from './views/nodes';
+import { VariableEditorPanel } from './views/variableEditorPanel';
 
 export async function activate(context: vscode.ExtensionContext) {
   const tokenStore = new TokenStore(context.secrets);
@@ -88,6 +89,15 @@ export async function activate(context: vscode.ExtensionContext) {
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         vscode.window.showErrorMessage(`Railway sign-in failed: ${message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand('railway.loginWithCli', async () => {
+      await authProvider.loginWithCli();
+      const hasCliToken = await tokenStore.hasAnyToken();
+      if (hasCliToken) {
+        await vscode.commands.executeCommand('setContext', 'railway.authenticated', true);
+        treeProvider.refresh();
       }
     }),
 
@@ -207,46 +217,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('railway.viewVariables', async (node) => {
       if (!node?.serviceId || !node?.deployment?.environmentId) {
-        vscode.window.showWarningMessage('Select a service with a deployment to view variables');
+        vscode.window.showWarningMessage('Select a service with a deployment to manage variables');
         return;
       }
-      try {
-        const vars = await apiClient.getVariables(node.projectId, node.deployment.environmentId, node.serviceId);
-        const names = Object.keys(vars).sort();
-        if (names.length === 0) {
-          vscode.window.showInformationMessage('No environment variables configured');
-          return;
-        }
-        const picked = await vscode.window.showQuickPick(
-          names.map((n) => ({ label: n, description: '••••••••' })),
-          { placeHolder: 'Select variable to copy value' }
-        );
-        if (picked) {
-          await vscode.env.clipboard.writeText(vars[picked.label]);
-          vscode.window.showInformationMessage(`Copied ${picked.label} value to clipboard`);
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        vscode.window.showErrorMessage(`Failed to load variables: ${msg}`);
-      }
-    }),
-
-    vscode.commands.registerCommand('railway.addVariable', async (node) => {
-      if (!node?.serviceId || !node?.deployment?.environmentId) {
-        vscode.window.showWarningMessage('Select a service with a deployment');
-        return;
-      }
-      const name = await vscode.window.showInputBox({ prompt: 'Variable name', placeHolder: 'MY_VARIABLE' });
-      if (!name) { return; }
-      const value = await vscode.window.showInputBox({ prompt: `Value for ${name}`, password: true });
-      if (value === undefined) { return; }
-      try {
-        await apiClient.upsertVariable(node.projectId, node.deployment.environmentId, node.serviceId, name, value);
-        vscode.window.showInformationMessage(`Variable ${name} set successfully`);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        vscode.window.showErrorMessage(`Failed to set variable: ${msg}`);
-      }
+      await VariableEditorPanel.show(apiClient, {
+        serviceName: node.serviceName,
+        serviceId: node.serviceId,
+        projectId: node.projectId,
+        environmentId: node.deployment.environmentId,
+        environmentName: node.deployment.environmentName ?? 'Unknown',
+      });
     }),
 
     vscode.commands.registerCommand('railway.exportEnv', async (node) => {
