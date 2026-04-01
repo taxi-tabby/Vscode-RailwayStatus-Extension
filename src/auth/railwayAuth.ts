@@ -1,13 +1,18 @@
 import * as vscode from 'vscode';
 import * as http from 'node:http';
 import * as crypto from 'node:crypto';
-import * as os from 'node:os';
-import { RAILWAY_CLI_LOGIN_URL } from '../constants';
+import {
+  RAILWAY_OAUTH_AUTH_URL,
+  RAILWAY_OAUTH_TOKEN_URL,
+  RAILWAY_OAUTH_CLIENT_ID,
+  RAILWAY_OAUTH_SCOPES,
+} from '../constants';
 import { TokenStore } from './tokenStore';
 
 const AUTH_PROVIDER_ID = 'railway';
 const AUTH_PROVIDER_LABEL = 'Railway';
-const RAILWAY_ORIGIN = 'https://railway.com';
+const CALLBACK_PATH = '/callback';
+const AUTH_TIMEOUT_MS = 300_000; // 5 minutes (matching CLI)
 
 export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscode.Disposable {
   private _onDidChangeSessions = new vscode.EventEmitter<vscode.AuthenticationProviderAuthenticationSessionsChangeEvent>();
@@ -45,25 +50,44 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
   }
 
   async createSession(_scopes: string[]): Promise<vscode.AuthenticationSession> {
-    const { port, server, tokenPromise } = await this.startCallbackServer();
+    const { port, server, codePromise } = await this.startCallbackServer();
+    const redirectUri = `http://127.0.0.1:${port}${CALLBACK_PATH}`;
 
-    const code = generateNumericCode(32);
-    const payload = `port=${port}&code=${code}&hostname=${os.hostname()}`;
-    // Use base64 with URL-safe characters (matching Rust CLI's URL_SAFE + padding)
-    const encoded = Buffer.from(payload).toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_');
+    // Generate PKCE parameters
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+    const state = generateState();
 
-    const loginUrl = `${RAILWAY_CLI_LOGIN_URL}?d=${encoded}`;
-    await vscode.env.openExternal(vscode.Uri.parse(loginUrl));
+    // Build authorization URL (matching Railway CLI's OAuth flow)
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: RAILWAY_OAUTH_CLIENT_ID,
+      redirect_uri: redirectUri,
+      scope: RAILWAY_OAUTH_SCOPES,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      state,
+      prompt: 'consent',
+    });
+
+    const authUrl = `${RAILWAY_OAUTH_AUTH_URL}?${params.toString()}`;
+    await vscode.env.openExternal(vscode.Uri.parse(authUrl));
 
     try {
-      const token = await tokenPromise;
-      await this.tokenStore.storeAccessToken(token);
+      const { code, receivedState } = await codePromise;
+
+      // Validate state to prevent CSRF
+      if (receivedState !== state) {
+        throw new Error('State mismatch — possible CSRF attack');
+      }
+
+      // Exchange authorization code for tokens
+      const tokenResponse = await this.exchangeCodeForToken(code, redirectUri, codeVerifier);
+      await this.tokenStore.storeAccessToken(tokenResponse.access_token);
 
       const session: vscode.AuthenticationSession = {
         id: 'railway-session',
-        accessToken: token,
+        accessToken: tokenResponse.access_token,
         account: { id: 'railway-user', label: 'Railway User' },
         scopes: [],
       };
@@ -80,63 +104,96 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 
+  private async exchangeCodeForToken(
+    code: string,
+    redirectUri: string,
+    codeVerifier: string
+  ): Promise<{ access_token: string }> {
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      client_id: RAILWAY_OAUTH_CLIENT_ID,
+      code_verifier: codeVerifier,
+    });
+
+    const response = await fetch(RAILWAY_OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Token exchange failed (${response.status}): ${text}`);
+    }
+
+    return response.json() as Promise<{ access_token: string }>;
+  }
+
   private startCallbackServer(): Promise<{
     port: number;
     server: http.Server;
-    tokenPromise: Promise<string>;
+    codePromise: Promise<{ code: string; receivedState: string }>;
   }> {
     return new Promise((resolveStart, rejectStart) => {
-      let resolveToken: (token: string) => void;
-      let rejectToken: (err: Error) => void;
+      let resolveCode: (value: { code: string; receivedState: string }) => void;
+      let rejectCode: (err: Error) => void;
 
-      const tokenPromise = new Promise<string>((res, rej) => {
-        resolveToken = res;
-        rejectToken = rej;
+      const codePromise = new Promise<{ code: string; receivedState: string }>((res, rej) => {
+        resolveCode = res;
+        rejectCode = rej;
       });
 
       const server = http.createServer((req, res) => {
-        const corsHeaders: Record<string, string> = {
-          'Access-Control-Allow-Origin': RAILWAY_ORIGIN,
-          'Access-Control-Allow-Methods': 'GET, HEAD, PUT, PATCH, POST, DELETE',
-          'Access-Control-Allow-Headers': '*',
-        };
+        const url = new URL(req.url ?? '/', `http://localhost`);
 
-        // Handle CORS preflight
-        if (req.method === 'OPTIONS') {
-          res.writeHead(204, corsHeaders);
+        // Only handle the callback path
+        if (url.pathname !== CALLBACK_PATH) {
+          res.writeHead(404);
           res.end();
           return;
         }
 
-        const url = new URL(req.url ?? '/', 'http://localhost');
-        const token = url.searchParams.get('token');
-
-        if (!token) {
-          res.writeHead(400, { 'Content-Type': 'application/json', ...corsHeaders });
-          res.end(JSON.stringify({ status: 'error', error: 'No token received' }));
+        const error = url.searchParams.get('error');
+        if (error) {
+          const description = url.searchParams.get('error_description') ?? error;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(buildHtmlPage('Authentication Failed', `Error: ${description}. You can close this tab.`));
+          rejectCode(new Error(description));
           return;
         }
 
-        res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders });
-        res.end(JSON.stringify({ status: 'Ok', error: '' }));
-        resolveToken(token);
+        const code = url.searchParams.get('code');
+        const receivedState = url.searchParams.get('state') ?? '';
+
+        if (!code) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(buildHtmlPage('Authentication Failed', 'No authorization code received. You can close this tab.'));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(buildHtmlPage('Authentication Successful', 'You can close this tab and return to VS Code.'));
+        resolveCode({ code, receivedState });
       });
 
       server.on('error', (err) => {
         rejectStart(err);
       });
 
-      // Listen on random port (50000-60000 range like Railway CLI)
-      const port = 50000 + crypto.randomInt(10000);
-      server.listen(port, '127.0.0.1', () => {
-        resolveStart({ port, server, tokenPromise });
+      // Listen on random port (port 0 lets the OS assign one)
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        const port = typeof addr === 'object' && addr ? addr.port : 0;
+        resolveStart({ port, server, codePromise });
       });
 
-      // Timeout after 2 minutes
+      // Timeout after 5 minutes
       setTimeout(() => {
         server.close();
-        rejectToken!(new Error('Authentication timed out'));
-      }, 120_000);
+        rejectCode!(new Error('Authentication timed out'));
+      }, AUTH_TIMEOUT_MS);
     });
   }
 
@@ -169,7 +226,32 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
   }
 }
 
-function generateNumericCode(length: number): string {
-  const bytes = crypto.randomBytes(length);
-  return Array.from(bytes, (b) => (b % 10).toString()).join('');
+/** Generate a PKCE code verifier (128 chars from unreserved charset) */
+function generateCodeVerifier(): string {
+  const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  const bytes = crypto.randomBytes(128);
+  return Array.from(bytes, (b) => charset[b % charset.length]).join('');
+}
+
+/** Generate a PKCE code challenge (S256) from the verifier */
+function generateCodeChallenge(verifier: string): string {
+  return crypto
+    .createHash('sha256')
+    .update(verifier)
+    .digest('base64url'); // base64url = URL-safe, no padding
+}
+
+/** Generate a random state parameter for CSRF protection */
+function generateState(): string {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+/** Build a simple HTML response page */
+function buildHtmlPage(title: string, message: string): string {
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${title}</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#1a1a2e;color:#e0e0e0}
+.card{text-align:center;padding:2rem;border-radius:12px;background:#16213e;box-shadow:0 4px 20px rgba(0,0,0,.3)}
+h1{margin:0 0 .5rem;font-size:1.5rem}p{margin:0;opacity:.8}</style>
+</head><body><div class="card"><h1>${title}</h1><p>${message}</p></div></body></html>`;
 }

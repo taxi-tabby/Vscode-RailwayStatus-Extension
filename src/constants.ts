@@ -1,5 +1,9 @@
 export const RAILWAY_GRAPHQL_ENDPOINT = 'https://backboard.railway.com/graphql/v2';
-export const RAILWAY_CLI_LOGIN_URL = 'https://railway.com/cli-login';
+
+export const RAILWAY_OAUTH_AUTH_URL = 'https://backboard.railway.com/oauth/auth';
+export const RAILWAY_OAUTH_TOKEN_URL = 'https://backboard.railway.com/oauth/token';
+export const RAILWAY_OAUTH_CLIENT_ID = 'rlwy_oaci_onEklvmksh1hRUiCo7E2zX12';
+export const RAILWAY_OAUTH_SCOPES = 'openid email profile offline_access workspace:admin project:admin';
 
 export const SECRET_KEY_ACCESS_TOKEN = 'railway.accessToken';
 export const SECRET_KEY_API_TOKEN = 'railway.apiToken';
