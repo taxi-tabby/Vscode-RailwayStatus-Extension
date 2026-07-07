@@ -10,6 +10,7 @@ import { LogViewer } from './views/logViewer';
 import { ServiceDetailPanel } from './views/serviceDetailPanel';
 import { ServiceNode } from './views/nodes';
 import { VariableEditorPanel } from './views/variableEditorPanel';
+import { formatDotEnv } from './utils/dotenv';
 
 export async function activate(context: vscode.ExtensionContext) {
   const tokenStore = new TokenStore(context.secrets);
@@ -230,8 +231,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
       try {
         const vars = await apiClient.getVariables(node.projectId, node.deployment.environmentId, node.serviceId);
-        const content = Object.entries(vars).sort(([a], [b]) => a.localeCompare(b))
-          .map(([k, v]) => `${k}=${v}`).join('\n');
+        const content = formatDotEnv(vars);
         const uri = await vscode.window.showSaveDialog({
           defaultUri: vscode.Uri.file('.env'),
           filters: { 'Environment files': ['env'], 'All files': ['*'] },
