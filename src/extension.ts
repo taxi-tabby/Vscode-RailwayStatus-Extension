@@ -11,6 +11,7 @@ import { ServiceDetailPanel } from './views/serviceDetailPanel';
 import { ServiceNode } from './views/nodes';
 import { VariableEditorPanel } from './views/variableEditorPanel';
 import { formatDotEnv } from './utils/dotenv';
+import { LinkedProjectService } from './services/linkedProject';
 
 export async function activate(context: vscode.ExtensionContext) {
   const tokenStore = new TokenStore(context.secrets);
@@ -41,6 +42,9 @@ export async function activate(context: vscode.ExtensionContext) {
     showCollapseAll: true,
   });
   treeProvider.setTreeView(treeView);
+
+  const linkedService = new LinkedProjectService(apiClient, treeProvider, context.workspaceState);
+  linkedService.updateStatusBar();
 
   // Check if already authenticated
   const hasToken = await tokenStore.hasAnyToken();
@@ -80,6 +84,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register commands
   context.subscriptions.push(
     treeView,
+    linkedService,
     authProvider,
     logViewer,
     treeProvider.pollingManager,
@@ -248,15 +253,23 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('railway.linkProject', async (node) => {
       if (node?.projectId) {
-        treeProvider.linkProject(node.projectId);
+        treeProvider.linkProject(node.projectId, node.projectName);
+        linkedService.updateStatusBar();
         vscode.window.showInformationMessage(`Linked to project "${node.projectName}"`);
       }
     }),
 
     vscode.commands.registerCommand('railway.unlinkProject', async () => {
       treeProvider.unlinkProject();
+      linkedService.updateStatusBar();
       vscode.window.showInformationMessage('Project unlinked');
     }),
+
+    vscode.commands.registerCommand('railway.linkedActions', () => linkedService.showQuickActions()),
+    vscode.commands.registerCommand('railway.openTerminal', () => linkedService.openTerminal()),
+    vscode.commands.registerCommand('railway.ssh', () => linkedService.ssh()),
+    vscode.commands.registerCommand('railway.exportEnvLinked', () => linkedService.exportEnv()),
+    vscode.commands.registerCommand('railway.changeLinkedTarget', () => linkedService.changeTarget()),
 
     vscode.commands.registerCommand('railway.logout', async () => {
       await tokenStore.clearAll();

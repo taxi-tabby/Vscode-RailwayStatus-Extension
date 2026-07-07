@@ -44,6 +44,7 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
 
   private workspaceState!: vscode.Memento;
   private linkedProjectId: string | undefined;
+  private linkedProjectName: string | undefined;
 
   /** Must be called after construction to restore persisted settings */
   initState(globalState: vscode.Memento, workspaceState: vscode.Memento): void {
@@ -51,22 +52,33 @@ export class RailwayTreeDataProvider implements vscode.TreeDataProvider<RailwayN
     this.workspaceState = workspaceState;
     this.sortMode = globalState.get<SortMode>('railway.sortMode', 'name');
     this.linkedProjectId = workspaceState.get<string>('railway.linkedProjectId');
+    this.linkedProjectName = workspaceState.get<string>('railway.linkedProjectName');
   }
 
-  linkProject(projectId: string): void {
+  linkProject(projectId: string, projectName: string): void {
     this.linkedProjectId = projectId;
+    this.linkedProjectName = projectName;
     this.workspaceState?.update('railway.linkedProjectId', projectId);
+    this.workspaceState?.update('railway.linkedProjectName', projectName);
     this._onDidChangeTreeData.fire();
   }
 
   unlinkProject(): void {
     this.linkedProjectId = undefined;
+    this.linkedProjectName = undefined;
     this.workspaceState?.update('railway.linkedProjectId', undefined);
+    this.workspaceState?.update('railway.linkedProjectName', undefined);
     this._onDidChangeTreeData.fire();
   }
 
   getLinkedProjectId(): string | undefined {
     return this.linkedProjectId;
+  }
+
+  getLinkedProject(): { id: string; name: string } | undefined {
+    return this.linkedProjectId
+      ? { id: this.linkedProjectId, name: this.linkedProjectName ?? this.linkedProjectId }
+      : undefined;
   }
 
   setTreeView(treeView: vscode.TreeView<RailwayNode>): void {
