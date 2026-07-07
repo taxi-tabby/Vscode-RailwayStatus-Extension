@@ -154,6 +154,16 @@ export async function refreshAccessToken(refreshToken: string): Promise<TokenSet
 
 ### 5.2 `src/auth/tokenStore.ts` (확장)
 
+**테스트 가능성:** `vscode.SecretStorage`를 직접 import하면 vitest에서 `vscode` 모듈을 해석하지 못해 테스트가 깨진다. 따라서 구조적 인터페이스를 정의해 vscode 의존을 제거한다(실제 `context.secrets`는 구조적으로 대입 가능).
+```ts
+export interface SecretStorageLike {
+  get(key: string): Thenable<string | undefined>;
+  store(key: string, value: string): Thenable<void>;
+  delete(key: string): Thenable<void>;
+}
+// constructor(private secrets: SecretStorageLike) {}
+```
+추가/변경 메서드:
 ```ts
 async storeOAuthTokens(t: { accessToken: string; refreshToken?: string; expiresAt: number }): Promise<void>;
 async getRefreshToken(): Promise<string | undefined>;
@@ -173,25 +183,42 @@ async getExpiresAt(): Promise<number | undefined>;   // 저장은 문자열, 파
   3. `vscode.window.withProgress({ location: Notification, cancellable: true }, ...)`로 "브라우저에서 `KGSK-TFWD` 코드를 승인하세요" 표시. 취소 토큰 → `AbortController`.
   4. `pollForToken(...)` 완료 → `tokenStore.storeOAuthTokens(...)` → `onDidChangeSessions.fire({added:[session]})` → session 반환.
   5. 실패(만료/거부/취소)는 §7 규칙대로 안내.
-- `getValidAccessToken(now = Date.now): Promise<string | undefined>` — **중앙 접근자**:
-  1. OAuth access token 있고 `expiresAt - now > TOKEN_REFRESH_BUFFER_MS` → 그대로 반환.
-  2. 만료 임박/만료 + refresh token 있음 → `refreshAccessToken()` → 저장 → 새 access token 반환. (동시 호출 중복 갱신 방지를 위해 in-flight refresh Promise를 캐시.)
-  3. refresh 실패가 `invalid_grant` → OAuth 토큰 clear, `undefined` 반환. 네트워크 오류 → 기존 토큰 유지하고 그대로 반환(세션 보존).
-  4. OAuth 토큰 없음 → API 토큰 반환(없으면 `undefined`).
-- `forceRefresh(): Promise<string | undefined>` — 버퍼와 무관하게 refresh token으로 강제 갱신(API 401 대응용). refresh token 없음/`invalid_grant` → OAuth 토큰 clear 후 `undefined`. 네트워크 오류 → `undefined`(재시도는 호출측 판단). `getValidAccessToken`과 동일한 in-flight Promise 캐시를 공유해 중복 갱신을 막는다.
-- `getSessions()` — `getValidAccessToken()` 결과로 세션 구성(없으면 `[]`).
+- 토큰 유효성/갱신 로직은 `SessionManager`(§5.3.1)에 위임한다. `getValidAccessToken`/`forceRefresh`는 SessionManager 인스턴스로 프록시.
+- `getSessions()` — `sessionManager.getValidAccessToken()` 결과로 세션 구성(없으면 `[]`).
 - `loginWithToken()` — 기존 유지(검증 후 `storeApiToken`).
 - `removeSession()` / logout — `tokenStore.clearAll()`.
 
 **제거**: `startCallbackServer`, `exchangeCodeForToken`, PKCE 유틸(`generateCodeVerifier/Challenge/State`), `getClientId`, `promptOAuthSetup`, `loginWithCli`, 콜백 HTML 유틸.
+
+### 5.3.1 `src/auth/sessionManager.ts` (신규) — 토큰 오케스트레이션 (vscode 비의존)
+
+인증의 핵심인 "유효 토큰 반환/자동 갱신" 로직을 vscode에 의존하지 않는 클래스로 분리해 목킹 없이 완전히 단위 테스트한다. `TokenStore` + `deviceFlow.refreshAccessToken` + 주입된 `now()`에만 의존.
+
+```ts
+export class SessionManager {
+  constructor(
+    private store: TokenStore,
+    private refresh: (rt: string) => Promise<TokenSet> = refreshAccessToken,
+    private now: () => number = Date.now,
+  ) {}
+
+  // 유효하면 그대로, 만료 임박이면 refresh, 없으면 API 토큰 폴백
+  async getValidAccessToken(): Promise<string | undefined>;
+  // 버퍼 무시하고 강제 refresh (API 401 대응)
+  async forceRefresh(): Promise<string | undefined>;
+}
+```
+- `getValidAccessToken`: (1) OAuth access token 있고 `expiresAt - now() > TOKEN_REFRESH_BUFFER_MS` → 그대로. (2) 만료 임박/만료 + refresh token → `doRefresh()`. (3) OAuth 없음 → API 토큰(없으면 `undefined`).
+- `forceRefresh`: refresh token 있으면 `doRefresh()`, 없으면 `undefined`.
+- `doRefresh()`: **in-flight Promise 캐시**로 동시 호출 시 1회만 수행. 성공 → `storeOAuthTokens` 후 새 access token 반환. `invalid_grant` → OAuth 토큰 clear 후 `undefined`. 네트워크/기타 오류 → 토큰 보존, `undefined`(호출측이 기존 흐름 유지/재시도 판단).
 
 ### 5.4 `src/api/client.ts` (조정)
 
 생성자 옵션 변경:
 ```ts
 {
-  getToken: () => Promise<string | undefined>;        // = authProvider.getValidAccessToken
-  forceRefresh: () => Promise<string | undefined>;    // = authProvider.forceRefresh (invalid 시 undefined)
+  getToken: () => Promise<string | undefined>;        // = sessionManager.getValidAccessToken
+  forceRefresh: () => Promise<string | undefined>;    // = sessionManager.forceRefresh (invalid 시 undefined)
   onAuthFailure: () => void;
 }
 ```
@@ -202,7 +229,7 @@ async getExpiresAt(): Promise<number | undefined>;   // 저장은 문자열, 파
 
 ### 5.5 `src/extension.ts` (조정)
 
-- `apiClient`를 `authProvider.getValidAccessToken` / `authProvider.forceRefresh`에 연결.
+- `sessionManager = new SessionManager(tokenStore)` 생성. `apiClient`를 `sessionManager.getValidAccessToken` / `sessionManager.forceRefresh`에 연결. `authProvider`도 동일 `sessionManager`를 주입받아 `getSessions`에서 재사용.
 - `railway.loginWithCli` 명령 등록 제거.
 - `onAuthFailure`: "Railway 세션이 만료되었습니다. 다시 로그인" → `railway.login`(기존 유지).
 - activate 시 `hasAnyToken`으로 컨텍스트 설정(기존 유지). 최초 refresh는 첫 API 호출에서 지연 수행.
@@ -241,12 +268,14 @@ async getExpiresAt(): Promise<number | undefined>;   // 저장은 문자열, 파
 
 ## 8. 테스트 계획 (vitest)
 
-- `deviceFlow.spec.ts` (fetch 목킹):
+테스트는 프로젝트 규약대로 소스 옆 **`*.test.ts`** 로 co-locate하고, `vscode` 비의존 계층만 테스트한다(목킹 불필요).
+
+- `src/auth/deviceFlow.test.ts` (`global.fetch` 목킹):
   - `requestDeviceCode`: §3.1 실측 응답(특히 `interval` 없음 → 5s 기본) 파싱 검증.
   - `pollForToken`: `authorization_pending`(§3.2 실측) → 200 성공 시퀀스, `slow_down` 시 interval 증가, `access_denied`/`expired_token` throw, `expiresAt` 초과 시 throw, `AbortSignal` 취소 throw.
-  - `refreshAccessToken`: 200 성공, `invalid_grant` → 판별 가능한 에러.
-- `tokenStore.spec.ts`: OAuth 토큰셋 저장/조회/삭제(+`expiresAt` 숫자 파싱), API 토큰, `clearAll`이 신규 키까지 삭제, `hasAnyToken`.
-- `getValidAccessToken`: 주입한 `now()`로 (a) 유효→그대로 (b) 만료임박+refresh→갱신 (c) `invalid_grant`→clear+undefined (d) 네트워크오류→기존 유지 (e) OAuth 없음→API 토큰 폴백, 각 분기 검증. 동시 호출 시 refresh 1회만 수행.
+  - `refreshAccessToken`: 200 성공, `invalid_grant` → 판별 가능한 `DeviceAuthError`.
+- `src/auth/tokenStore.test.ts` (인메모리 `SecretStorageLike` 페이크): OAuth 토큰셋 저장/조회/삭제(+`expiresAt` 숫자 파싱), API 토큰, `clearAll`이 신규 키까지 삭제, `hasAnyToken`.
+- `src/auth/sessionManager.test.ts` (인메모리 store + 주입 `now`/`refresh`): (a) 유효→그대로 (b) 만료임박+refresh→갱신 (c) `invalid_grant`→clear+undefined (d) 네트워크오류→undefined+토큰 보존 (e) OAuth 없음→API 토큰 폴백 (f) 동시 호출 시 refresh 1회만.
 - 시간·`fetch`는 주입/목킹으로 결정적 테스트 유지(스크립트가 아닌 확장 런타임이므로 `Date.now()` 사용 가능).
 
 ## 9. 완료 기준 (Definition of Done) — "인증이 제대로 동작해야 함"
