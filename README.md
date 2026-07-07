@@ -13,7 +13,7 @@ View and manage your [Railway](https://railway.com) deployments directly in VS C
 - **Service Detail Panel** — Click a service to see deployment history with action buttons
 - **Environment Variable Editor** — Full add/modify/delete with value masking and batch apply
 - **Export .env** — Export environment variables to a `.env` file
-- **Project Linking** — Pin a Railway project to your VS Code workspace
+- **Linked Project Actions** — Pin a project, then SSH into a service, edit variables, export `.env`, or open the dashboard from a status bar quick menu
 - **Persistent Settings** — Sort mode and linked project survive restarts
 
 ## Getting Started
@@ -46,6 +46,19 @@ For restricted networks or automation where the browser flow isn't usable:
 2. Create a new token
 3. In VS Code, click **"Use API Token"** and paste it
 
+## Linked Project
+
+Right-click a project in the tree and choose **Link to Workspace** to pin it. The linked project shows in the status bar (`$(link) <name>`); click it — or use the project's context menu — for quick actions:
+
+- **SSH into service** — opens a terminal running `railway ssh` for the linked project/service/environment. Requires the [Railway CLI](https://docs.railway.com/guides/cli) (an install guide is shown if it is missing) and its own `railway login`. SSH needs a **running** instance: if the service is sleeping or not deployed, the action is blocked with an explanation — wake it (send a request) first, then retry.
+- **Edit variables** — open the variable editor for the linked service.
+- **Export .env** — save the linked service's variables to a `.env` file.
+- **Open dashboard** — open the project on railway.com.
+- **Change service/environment** — re-pick the target.
+- **Unlink** — remove the pin.
+
+When a project has multiple services or environments you are asked to pick once; the choice is remembered until you change it or unlink.
+
 ## Commands
 
 | Command | Description |
@@ -62,6 +75,10 @@ For restricted networks or automation where the browser flow isn't usable:
 | Railway: Copy Service URL | Copy the deployed URL |
 | Railway: Link to Workspace | Pin a project to the current VS Code workspace |
 | Railway: Unlink Project | Remove the project pin |
+| Railway: Linked Project: Quick Actions | Open the linked project's quick action menu |
+| Railway: SSH into Service (linked) | SSH into the linked service via the Railway CLI |
+| Railway: Export .env (linked) | Export the linked service's variables to a `.env` file |
+| Railway: Change Linked Service/Environment | Re-pick the linked service/environment |
 | Railway: Sort By... | Sort projects/services by name, created, or updated |
 | Railway: Sign Out | Clear stored credentials |
 
