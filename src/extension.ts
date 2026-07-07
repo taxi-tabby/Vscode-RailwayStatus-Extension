@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { RailwayAuthProvider } from './auth/railwayAuth';
 import { TokenStore } from './auth/tokenStore';
+import { SessionManager } from './auth/sessionManager';
+import { DeviceAuthCancelled, describeDeviceAuthError } from './auth/deviceFlow';
 import { RailwayApiClient } from './api/client';
 import { RailwayTreeDataProvider, type SortMode } from './views/treeProvider';
 import { ProjectNode, EnvironmentNode, WorkspaceNode } from './views/nodes';
@@ -11,7 +13,8 @@ import { VariableEditorPanel } from './views/variableEditorPanel';
 
 export async function activate(context: vscode.ExtensionContext) {
   const tokenStore = new TokenStore(context.secrets);
-  const authProvider = new RailwayAuthProvider(context, tokenStore);
+  const sessionManager = new SessionManager(tokenStore);
+  const authProvider = new RailwayAuthProvider(context, tokenStore, sessionManager);
 
   const apiClient = new RailwayApiClient({
     getAccessToken: () => tokenStore.getAccessToken(),
@@ -87,17 +90,8 @@ export async function activate(context: vscode.ExtensionContext) {
         await vscode.commands.executeCommand('setContext', 'railway.authenticated', true);
         treeProvider.refresh();
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error';
-        vscode.window.showErrorMessage(`Railway sign-in failed: ${message}`);
-      }
-    }),
-
-    vscode.commands.registerCommand('railway.loginWithCli', async () => {
-      await authProvider.loginWithCli();
-      const hasCliToken = await tokenStore.hasAnyToken();
-      if (hasCliToken) {
-        await vscode.commands.executeCommand('setContext', 'railway.authenticated', true);
-        treeProvider.refresh();
+        if (err instanceof DeviceAuthCancelled) { return; }
+        vscode.window.showErrorMessage(`Railway 로그인 실패: ${describeDeviceAuthError(err)}`);
       }
     }),
 

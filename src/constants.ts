@@ -13,11 +13,6 @@ export const DEVICE_POLL_DEFAULT_INTERVAL_MS = 5_000;
 export const DEVICE_POLL_SLOW_DOWN_STEP_MS = 5_000;
 export const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
-// 콜백 상수는 Task 5(railwayAuth 재작성)에서 사용처 제거 후 삭제
-export const RAILWAY_OAUTH_AUTH_URL = 'https://backboard.railway.com/oauth/auth';
-export const OAUTH_CALLBACK_PORT = 9876;
-export const OAUTH_CALLBACK_PATH = '/callback';
-
 export const SECRET_KEY_ACCESS_TOKEN = 'railway.accessToken';
 export const SECRET_KEY_API_TOKEN = 'railway.apiToken';
 export const SECRET_KEY_REFRESH_TOKEN = 'railway.refreshToken';
