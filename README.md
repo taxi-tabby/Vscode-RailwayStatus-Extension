@@ -25,41 +25,33 @@ View and manage your [Railway](https://railway.com) deployments directly in VS C
 
 ## Authentication
 
-Three sign-in methods are available. All tokens are validated before saving.
+Two sign-in methods are available. OAuth sessions are refreshed automatically, so you stay signed in without re-authenticating.
 
-### API Token (simplest)
+### Sign in with Railway (recommended)
+
+Browser-based device login using the OAuth 2.0 Device Authorization Grant — the same flow as `railway login --browserless`. No Railway CLI install and no OAuth app registration required.
+
+1. Click **"Sign in with Railway"**
+2. Your browser opens to `railway.com/activate` with the pairing code pre-filled (the code is also copied to your clipboard)
+3. Approve in the browser — Google / Microsoft / GitHub SSO are all handled by Railway
+4. VS Code receives the token and keeps the session alive: the access token is refreshed automatically before it expires (via a stored refresh token), and it survives VS Code restarts
+
+If a session ever becomes unrecoverable (refresh token revoked), you'll be prompted to sign in again with a single click.
+
+### API Token (fallback)
+
+For restricted networks or automation where the browser flow isn't usable:
 
 1. Go to [railway.com/account/tokens](https://railway.com/account/tokens)
 2. Create a new token
 3. In VS Code, click **"Use API Token"** and paste it
 
-### Import from Railway CLI
-
-If you have the [Railway CLI](https://docs.railway.com/guides/cli) installed and logged in:
-
-1. Run `railway login` in your terminal (if not already logged in)
-2. In VS Code, click **"Import from Railway CLI"**
-3. The extension reads `~/.railway/config.json` automatically
-
-### OAuth (advanced)
-
-Requires registering an OAuth app in Railway:
-
-1. Go to [railway.com/workspace/developer](https://railway.com/workspace/developer)
-2. Click **New OAuth App**
-   - Type: **Native**
-   - Redirect URI: `http://127.0.0.1:9876/callback`
-3. Copy the **Client ID**
-4. In VS Code settings, set `railway.oauthClientId` to the Client ID
-5. Click **"Sign in with OAuth"**
-
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| Railway: Set API Token | Enter an API token manually |
-| Railway: Import from Railway CLI | Import credentials from CLI config |
-| Railway: Sign in with OAuth | Start OAuth authentication (requires setup) |
+| Railway: Sign in with Railway | Browser device login (recommended) |
+| Railway: Set API Token | Enter an API token manually (fallback) |
 | Railway: Refresh | Reload deployment data |
 | Railway: Redeploy | Redeploy the latest deployment |
 | Railway: Restart | Restart the current deployment |
@@ -77,7 +69,6 @@ Requires registering an OAuth app in Railway:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `railway.oauthClientId` | | (Optional) OAuth Client ID for OAuth sign-in |
 | `railway.autoRefresh` | `true` | Auto-refresh deployment statuses for expanded projects |
 | `railway.autoRefreshActiveInterval` | `10` | Polling interval (seconds) during active deployments |
 | `railway.autoRefreshIdleInterval` | `30` | Polling interval (seconds) when stable |

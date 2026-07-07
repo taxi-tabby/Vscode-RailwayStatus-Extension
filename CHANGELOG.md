@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+### Changed
+- **인증을 Device Authorization Grant(RFC 8628)로 단일화** — `railway login --browserless`와 동일한 브라우저 device 로그인을 확장 내부에 네이티브 구현. Railway CLI 설치나 OAuth 앱 등록이 필요 없음.
+- 인증 수단을 **Device 로그인(기본) + 수동 API 토큰(폴백)** 두 가지로 정리.
+
+### Fixed
+- **"인증이 계속 풀리는" 문제 해결** — `offline_access` 스코프로 refresh token을 저장하고, 만료 60초 전 자동 갱신 + API 401 시 강제 갱신 후 재시도. 세션이 VS Code 재시작 후에도 유지됨.
+- 브라우저(railway.com)에서 직접 로그인하므로 Microsoft 계정 SSO 인증 문제도 해소.
+
+### Removed
+- OAuth 앱 등록 방식(`railway.oauthClientId` 설정)과 로컬 콜백 서버(포트 9876) 제거.
+- "Import from Railway CLI"(`~/.railway/config.json` 임포트) 방식 제거 — 네이티브 device 로그인으로 대체.
+
 ## 0.3.0
 
 ### Added

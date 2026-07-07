@@ -2,7 +2,7 @@
   "name": "railway-status",
   "displayName": "Railway Status",
   "description": "View Railway.com deployment statuses directly in VS Code",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "taxi-tabby",
   "icon": "icon.png",
   "license": "MIT",
