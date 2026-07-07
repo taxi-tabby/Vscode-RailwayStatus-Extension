@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+- **Linked Project 활용 기능** — 프로젝트를 링크하면 다음을 사용할 수 있습니다(액션 시 서비스/환경을 고르고 기억).
+  - **Railway 환경 터미널** — linked 서비스/환경의 변수를 주입한 VS Code 터미널을 열어 로컬 앱을 Railway 설정으로 실행(`railway shell` 상당, CLI 불필요).
+  - **SSH 접속** — railway CLI 경유로 `railway ssh`를 linked 프로젝트/서비스/환경으로 실행(미설치 시 설치 가이드).
+  - **상태바 + 퀵 액션** — 상태바에 링크된 프로젝트 표시, 클릭 시 터미널/SSH/변수/.env export/대시보드/대상 변경/링크 해제 빠른 메뉴.
+  - **linked .env 원터치 내보내기**.
+- 링크 프로젝트 노드 컨텍스트 메뉴에 터미널/SSH/export/대상 변경 추가.
+
+### Changed
+- `.env` 내보내기 포맷 로직을 `formatDotEnv` 공용 유틸로 정리.
+
 ## 0.4.0
 
 ### Changed
