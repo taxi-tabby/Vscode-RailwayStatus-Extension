@@ -73,12 +73,24 @@ client_id=rlwy_oaci_onEklvmksh1hRUiCo7E2zX12
 
 **확정된 사실**: 미승인 시 **HTTP 400 + `error: "authorization_pending"`**. 폴링은 이 에러에서 계속 진행해야 한다(HTTP status가 아니라 body의 `error` 필드로 분기).
 
-### 3.3 미검증 항목(대화형 승인 필요 → 구현 시 수동 확인)
-- 승인 완료 시 200 응답의 정확한 필드(`access_token`, `refresh_token`, `expires_in`, `token_type`).
-- `slow_down`, `access_denied`, `expired_token` 실제 발생 케이스.
-- refresh_token grant 응답.
+### 3.3 승인 성공 & refresh (실제 브라우저 승인으로 실측 완료 — 2026-07-07)
 
-→ RFC 8628 표준과 Railway CLI 소스(`src/oauth.rs`)를 근거로 구현하되, **구현 후 실제 브라우저 승인으로 end-to-end 1회 검증**을 완료 기준에 포함한다(§9).
+실제 Railway 계정으로 device 로그인을 승인해 성공 경로를 실측했다(토큰 값은 마스킹).
+
+토큰 교환 성공 200 응답 필드:
+```
+keys: ["access_token", "expires_in", "id_token", "refresh_token", "scope", "token_type"]
+access_token : string
+refresh_token: string        ← offline_access 스코프로 항상 포함됨(자동 갱신의 핵심)
+expires_in   : 3600 (number) ← 액세스 토큰 수명 1시간
+token_type   : "Bearer"
+```
+
+refresh_token grant(`grant_type=refresh_token`) 응답: **HTTP 200**, 새 `access_token` 발급(값 회전 확인), `refresh_token` 반환(동일 값이 올 수 있으므로 코드는 `set.refreshToken ?? 기존값`으로 처리), `expires_in: 3600`.
+
+**의미**: 액세스 토큰이 1시간 만에 만료되는 것이 기존 "인증이 계속 풀리는" 근본 원인이었고, 이제 refresh_token으로 자동 갱신되어 해소된다. `parseTokenSet`가 읽는 필드가 실제 응답과 정확히 일치함을 확인.
+
+> `slow_down`/`access_denied`/`expired_token` 분기는 유닛 테스트로 커버(§8). RFC 8628 표준과 Railway CLI 소스(`src/oauth.rs`) 기준.
 
 ## 4. 상수 변경 (`src/constants.ts`)
 
