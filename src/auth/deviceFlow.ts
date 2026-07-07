@@ -58,9 +58,8 @@ async function readError(res: Response): Promise<string> {
   }
 }
 
-function parseTokenSet(j: {
-  access_token?: string; refresh_token?: string; expires_in?: number;
-}, now: () => number): TokenSet {
+function parseTokenSet(raw: unknown, now: () => number): TokenSet {
+  const j = (raw ?? {}) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!j.access_token) {
     throw new DeviceAuthError('unknown', 'token 응답에 access_token 없음');
   }
