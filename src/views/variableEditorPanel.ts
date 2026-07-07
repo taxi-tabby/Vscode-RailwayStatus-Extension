@@ -33,8 +33,12 @@ export class VariableEditorPanel {
     let variables: Record<string, string> = {};
     try {
       variables = await apiClient.getVariables(info.projectId, info.environmentId, info.serviceId);
-    } catch {
+    } catch (err) {
       variables = {};
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(
+        `Railway: 변수를 불러오지 못했습니다 (${message}). 빈 목록으로 표시됩니다.`
+      );
     }
 
     panel.webview.html = this.buildHtml(info, variables);

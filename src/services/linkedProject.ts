@@ -3,7 +3,7 @@ import { RailwayApiClient } from '../api/client';
 import { RailwayTreeDataProvider } from '../views/treeProvider';
 import { VariableEditorPanel } from '../views/variableEditorPanel';
 import { formatDotEnv } from '../utils/dotenv';
-import { detectRailwayCli, buildSshCommand } from '../utils/railwayCli';
+import { detectRailwayCli, buildSshCommand, hasUnsafeShellChars } from '../utils/railwayCli';
 
 interface NamedItem { id: string; name: string; }
 interface Target {
@@ -29,10 +29,22 @@ export class LinkedProjectService implements vscode.Disposable {
 
   updateStatusBar(): void {
     const linked = this.tree.getLinkedProject();
+    vscode.commands.executeCommand('setContext', 'railway.hasLinkedProject', !!linked);
     if (!linked) { this.status.hide(); return; }
     this.status.text = `$(link) ${linked.name}`;
     this.status.tooltip = `Railway linked: ${linked.name}\n클릭하여 빠른 작업 열기`;
     this.status.show();
+  }
+
+  /** 링크 해제: 기억된 서비스/환경 대상까지 정리한다. */
+  unlink(): void {
+    const linked = this.tree.getLinkedProject();
+    if (linked) {
+      this.workspaceState.update(`railway.linked.env.${linked.id}`, undefined);
+      this.workspaceState.update(`railway.linked.service.${linked.id}`, undefined);
+    }
+    this.tree.unlinkProject();
+    this.updateStatusBar();
   }
 
   async showQuickActions(): Promise<void> {
@@ -62,8 +74,7 @@ export class LinkedProjectService implements vscode.Disposable {
       case 'dashboard': return this.openDashboard();
       case 'change': return this.changeTarget();
       case 'unlink':
-        this.tree.unlinkProject();
-        this.updateStatusBar();
+        this.unlink();
         vscode.window.showInformationMessage('프로젝트 링크를 해제했습니다.');
         return;
     }
@@ -84,15 +95,20 @@ export class LinkedProjectService implements vscode.Disposable {
       env: vars,
     });
     term.show();
-    vscode.window.showInformationMessage(
-      `Railway 변수 ${Object.keys(vars).length}개를 주입한 터미널을 열었습니다.`,
-    );
+    const count = Object.keys(vars).length;
+    if (count === 0) {
+      vscode.window.showWarningMessage(
+        `${t.serviceName} (${t.environmentName})에 주입할 변수가 없습니다. 서비스/환경 선택이 맞는지 확인하세요.`,
+      );
+    } else {
+      vscode.window.showInformationMessage(`Railway 변수 ${count}개를 주입한 터미널을 열었습니다.`);
+    }
   }
 
   async ssh(): Promise<void> {
     if (!(await detectRailwayCli())) {
       const choice = await vscode.window.showWarningMessage(
-        'railway CLI가 필요합니다. 설치 후 다시 시도하세요.',
+        'railway CLI를 찾지 못했습니다(미설치이거나 PATH에 없음). 설치 후 다시 시도하세요.',
         'CLI 설치 가이드',
       );
       if (choice === 'CLI 설치 가이드') {
@@ -102,6 +118,12 @@ export class LinkedProjectService implements vscode.Disposable {
     }
     const t = await this.resolveTarget();
     if (!t) { return; }
+    if (hasUnsafeShellChars(t.serviceName) || hasUnsafeShellChars(t.environmentName)) {
+      vscode.window.showErrorMessage(
+        '서비스/환경 이름에 셸에서 안전하지 않은 문자가 있어 SSH 명령을 자동 구성할 수 없습니다. 터미널에서 직접 railway ssh를 실행하세요.',
+      );
+      return;
+    }
     const term = vscode.window.createTerminal(`Railway SSH: ${t.serviceName}`);
     term.show();
     term.sendText(buildSshCommand({
@@ -127,7 +149,12 @@ export class LinkedProjectService implements vscode.Disposable {
       filters: { 'Environment files': ['env'], 'All files': ['*'] },
     });
     if (!uri) { return; }
-    await vscode.workspace.fs.writeFile(uri, Buffer.from(formatDotEnv(vars), 'utf-8'));
+    try {
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(formatDotEnv(vars), 'utf-8'));
+    } catch (err) {
+      vscode.window.showErrorMessage(`.env 내보내기 실패: ${msg(err)}`);
+      return;
+    }
     vscode.window.showInformationMessage(
       `${Object.keys(vars).length}개 변수를 ${uri.fsPath} 에 내보냈습니다.`,
     );
@@ -145,10 +172,15 @@ export class LinkedProjectService implements vscode.Disposable {
     });
   }
 
-  openDashboard(): void {
+  async openDashboard(): Promise<void> {
     const linked = this.tree.getLinkedProject();
     if (!linked) { return; }
-    vscode.env.openExternal(vscode.Uri.parse(`https://railway.com/project/${linked.id}`));
+    const opened = await vscode.env.openExternal(
+      vscode.Uri.parse(`https://railway.com/project/${linked.id}`),
+    );
+    if (!opened) {
+      vscode.window.showErrorMessage('대시보드를 브라우저에서 열지 못했습니다.');
+    }
   }
 
   async changeTarget(): Promise<void> {

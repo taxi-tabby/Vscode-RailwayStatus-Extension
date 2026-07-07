@@ -260,8 +260,7 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('railway.unlinkProject', async () => {
-      treeProvider.unlinkProject();
-      linkedService.updateStatusBar();
+      linkedService.unlink();
       vscode.window.showInformationMessage('Project unlinked');
     }),
 
