@@ -41,7 +41,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     const tokenSet = await vscode.window.withProgress<TokenSet>(
       {
         location: vscode.ProgressLocation.Notification,
-        title: `Railway 로그인 대기 중 — 브라우저에서 코드 [${device.userCode}] 승인 (클립보드에 복사됨)`,
+        title: `Waiting for Railway sign-in — approve code [${device.userCode}] in your browser (copied to clipboard)`,
         cancellable: true,
       },
       async (_progress, cancelToken) => {
@@ -62,11 +62,11 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     this._onDidChangeSessions.fire({ added: [], removed: [], changed: [] });
   }
 
-  // ─── API Token (수동 폴백) ───
+  // ─── API Token (manual fallback) ───
   async loginWithToken(): Promise<void> {
     const token = await vscode.window.showInputBox({
       title: 'Railway: API Token',
-      prompt: 'Railway API 토큰을 붙여넣으세요 (Account 또는 Workspace 토큰)',
+      prompt: 'Paste your Railway API token (Account or Workspace token)',
       placeHolder: 'e.g. rlwy_xxxxxxxxxxxxxxxxxxxx',
       password: true,
       ignoreFocusOut: true,
@@ -78,13 +78,13 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
     const valid = await this.validateToken(trimmed);
     if (!valid) {
       vscode.window.showErrorMessage(
-        'Railway: 유효하지 않은 API 토큰입니다. railway.com/account/tokens 에서 확인하세요.',
+        'Railway: Invalid API token. Check it at railway.com/account/tokens.',
       );
       return;
     }
     await this.tokenStore.storeApiToken(trimmed);
     this._onDidChangeSessions.fire({ added: [this.buildSession(trimmed)], removed: [], changed: [] });
-    vscode.window.showInformationMessage('Railway: API 토큰으로 로그인되었습니다');
+    vscode.window.showInformationMessage('Railway: Signed in with API token');
   }
 
   // ─── Helpers ───
@@ -109,7 +109,7 @@ export class RailwayAuthProvider implements vscode.AuthenticationProvider, vscod
       const json = (await res.json()) as { data?: { me?: { id: string } } };
       return !!json.data?.me?.id;
     } catch {
-      return true; // 네트워크 오류: 통과시킴
+      return true; // network error: give the benefit of the doubt
     }
   }
 

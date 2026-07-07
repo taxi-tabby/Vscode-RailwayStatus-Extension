@@ -5,7 +5,7 @@ import {
   SECRET_KEY_TOKEN_EXPIRES_AT,
 } from '../constants';
 
-/** vscode.SecretStorage의 구조적 부분집합 (테스트를 위해 vscode 의존 제거) */
+/** Structural subset of vscode.SecretStorage (drops the vscode dependency for testing). */
 export interface SecretStorageLike {
   get(key: string): PromiseLike<string | undefined>;
   store(key: string, value: string): PromiseLike<void>;

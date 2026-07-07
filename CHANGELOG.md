@@ -1,31 +1,42 @@
 # Changelog
 
+## 0.5.1
+
+### Changed
+- All user-facing strings are now in English for consistency.
+
+### Removed
+- The linked-project "Railway environment terminal" (env-injected terminal) action — low value.
+
+### Fixed
+- SSH now checks the target service is running first. It blocks with a clear message when the service is sleeping or has no running instance (SSH is only reachable while the service is running).
+
 ## 0.5.0
 
 ### Added
-- **Linked Project 활용 기능** — 프로젝트를 링크하면 다음을 사용할 수 있습니다(액션 시 서비스/환경을 고르고 기억).
-  - **Railway 환경 터미널** — linked 서비스/환경의 변수를 주입한 VS Code 터미널을 열어 로컬 앱을 Railway 설정으로 실행(`railway shell` 상당, CLI 불필요).
-  - **SSH 접속** — railway CLI 경유로 `railway ssh`를 linked 프로젝트/서비스/환경으로 실행(미설치 시 설치 가이드).
-  - **상태바 + 퀵 액션** — 상태바에 링크된 프로젝트 표시, 클릭 시 터미널/SSH/변수/.env export/대시보드/대상 변경/링크 해제 빠른 메뉴.
-  - **linked .env 원터치 내보내기**.
-- 링크 프로젝트 노드 컨텍스트 메뉴에 터미널/SSH/export/대상 변경 추가.
+- **Linked project actions** — after linking a project you can (service/environment are chosen and remembered per action):
+  - **Railway environment terminal** — open a VS Code terminal with the linked service/environment variables injected, to run your local app against Railway config (`railway shell` equivalent, no CLI required). *(Removed in 0.5.1.)*
+  - **SSH** — run `railway ssh` for the linked project/service/environment via the railway CLI (install guide shown if missing).
+  - **Status bar + quick actions** — the linked project shows in the status bar; clicking it opens a quick menu (SSH / variables / .env export / dashboard / change target / unlink).
+  - **One-touch `.env` export** for the linked service.
+- Added terminal/SSH/export/change-target items to the linked project node's context menu.
 
 ### Changed
-- `.env` 내보내기 포맷 로직을 `formatDotEnv` 공용 유틸로 정리.
+- Extracted the `.env` formatting into a shared `formatDotEnv` util.
 
 ## 0.4.0
 
 ### Changed
-- **인증을 Device Authorization Grant(RFC 8628)로 단일화** — `railway login --browserless`와 동일한 브라우저 device 로그인을 확장 내부에 네이티브 구현. Railway CLI 설치나 OAuth 앱 등록이 필요 없음.
-- 인증 수단을 **Device 로그인(기본) + 수동 API 토큰(폴백)** 두 가지로 정리.
+- **Unified authentication on the Device Authorization Grant (RFC 8628)** — a native, in-extension implementation of the same browser device login as `railway login --browserless`. No railway CLI install and no OAuth app registration required.
+- Reduced sign-in to two methods: **device login (default) + manual API token (fallback)**.
 
 ### Fixed
-- **"인증이 계속 풀리는" 문제 해결** — `offline_access` 스코프로 refresh token을 저장하고, 만료 60초 전 자동 갱신 + API 401 시 강제 갱신 후 재시도. 세션이 VS Code 재시작 후에도 유지됨.
-- 브라우저(railway.com)에서 직접 로그인하므로 Microsoft 계정 SSO 인증 문제도 해소.
+- **Fixed sessions repeatedly dropping** — the `offline_access` scope yields a refresh token, so the access token is renewed automatically ~60s before expiry and force-refreshed + retried on API 401. Sessions now survive VS Code restarts.
+- Signing in through the real browser (railway.com) also resolves the Microsoft-account SSO sign-in issue.
 
 ### Removed
-- OAuth 앱 등록 방식(`railway.oauthClientId` 설정)과 로컬 콜백 서버(포트 9876) 제거.
-- "Import from Railway CLI"(`~/.railway/config.json` 임포트) 방식 제거 — 네이티브 device 로그인으로 대체.
+- The OAuth-app method (`railway.oauthClientId` setting) and the local callback server (port 9876).
+- "Import from Railway CLI" (`~/.railway/config.json` import) — replaced by native device login.
 
 ## 0.3.0
 

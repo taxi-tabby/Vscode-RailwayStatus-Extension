@@ -2,7 +2,7 @@
   "name": "railway-status",
   "displayName": "Railway Status",
   "description": "View Railway.com deployment statuses directly in VS Code",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "taxi-tabby",
   "icon": "icon.png",
   "license": "MIT",
@@ -143,12 +143,6 @@
         "icon": "$(link)"
       },
       {
-        "command": "railway.openTerminal",
-        "title": "Open Railway Terminal (linked)",
-        "category": "Railway",
-        "icon": "$(terminal)"
-      },
-      {
         "command": "railway.ssh",
         "title": "SSH into Service (linked)",
         "category": "Railway",
@@ -177,10 +171,6 @@
       "commandPalette": [
         {
           "command": "railway.linkedActions",
-          "when": "railway.hasLinkedProject"
-        },
-        {
-          "command": "railway.openTerminal",
           "when": "railway.hasLinkedProject"
         },
         {
@@ -265,14 +255,9 @@
           "group": "3_link"
         },
         {
-          "command": "railway.openTerminal",
-          "when": "viewItem == railwayProjectLinked",
-          "group": "2_linked@1"
-        },
-        {
           "command": "railway.ssh",
           "when": "viewItem == railwayProjectLinked",
-          "group": "2_linked@2"
+          "group": "2_linked@1"
         },
         {
           "command": "railway.exportEnvLinked",

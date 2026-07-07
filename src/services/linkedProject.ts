@@ -32,11 +32,11 @@ export class LinkedProjectService implements vscode.Disposable {
     vscode.commands.executeCommand('setContext', 'railway.hasLinkedProject', !!linked);
     if (!linked) { this.status.hide(); return; }
     this.status.text = `$(link) ${linked.name}`;
-    this.status.tooltip = `Railway linked: ${linked.name}\n클릭하여 빠른 작업 열기`;
+    this.status.tooltip = `Railway linked: ${linked.name}\nClick for quick actions`;
     this.status.show();
   }
 
-  /** 링크 해제: 기억된 서비스/환경 대상까지 정리한다. */
+  /** Unlink the project, also clearing the remembered service/environment target. */
   unlink(): void {
     const linked = this.tree.getLinkedProject();
     if (linked) {
@@ -50,24 +50,22 @@ export class LinkedProjectService implements vscode.Disposable {
   async showQuickActions(): Promise<void> {
     const linked = this.tree.getLinkedProject();
     if (!linked) {
-      vscode.window.showInformationMessage('먼저 트리에서 프로젝트를 링크하세요.');
+      vscode.window.showInformationMessage('Link a project from the tree first.');
       return;
     }
     const pick = await vscode.window.showQuickPick(
       [
-        { label: '$(terminal) Railway 터미널 열기', id: 'terminal' },
-        { label: '$(terminal-bash) SSH 접속', id: 'ssh' },
-        { label: '$(symbol-variable) 변수 편집기', id: 'variables' },
-        { label: '$(export) .env 내보내기', id: 'export' },
-        { label: '$(globe) 대시보드 열기', id: 'dashboard' },
-        { label: '$(pinned-dirty) 서비스/환경 변경', id: 'change' },
-        { label: '$(circle-slash) 링크 해제', id: 'unlink' },
+        { label: '$(terminal-bash) SSH into service', id: 'ssh' },
+        { label: '$(symbol-variable) Edit variables', id: 'variables' },
+        { label: '$(export) Export .env', id: 'export' },
+        { label: '$(globe) Open dashboard', id: 'dashboard' },
+        { label: '$(pinned-dirty) Change service/environment', id: 'change' },
+        { label: '$(circle-slash) Unlink', id: 'unlink' },
       ],
-      { title: `Railway: ${linked.name}`, placeHolder: '작업 선택' },
+      { title: `Railway: ${linked.name}`, placeHolder: 'Choose an action' },
     );
     if (!pick) { return; }
     switch (pick.id) {
-      case 'terminal': return this.openTerminal();
       case 'ssh': return this.ssh();
       case 'variables': return this.openVariables();
       case 'export': return this.exportEnv();
@@ -75,52 +73,54 @@ export class LinkedProjectService implements vscode.Disposable {
       case 'change': return this.changeTarget();
       case 'unlink':
         this.unlink();
-        vscode.window.showInformationMessage('프로젝트 링크를 해제했습니다.');
+        vscode.window.showInformationMessage('Project unlinked.');
         return;
-    }
-  }
-
-  async openTerminal(): Promise<void> {
-    const t = await this.resolveTarget();
-    if (!t) { return; }
-    let vars: Record<string, string>;
-    try {
-      vars = await this.api.getVariables(t.projectId, t.environmentId, t.serviceId);
-    } catch (err) {
-      vscode.window.showErrorMessage(`변수 조회 실패: ${msg(err)}`);
-      return;
-    }
-    const term = vscode.window.createTerminal({
-      name: `Railway ${t.serviceName} (${t.environmentName})`,
-      env: vars,
-    });
-    term.show();
-    const count = Object.keys(vars).length;
-    if (count === 0) {
-      vscode.window.showWarningMessage(
-        `${t.serviceName} (${t.environmentName})에 주입할 변수가 없습니다. 서비스/환경 선택이 맞는지 확인하세요.`,
-      );
-    } else {
-      vscode.window.showInformationMessage(`Railway 변수 ${count}개를 주입한 터미널을 열었습니다.`);
     }
   }
 
   async ssh(): Promise<void> {
     if (!(await detectRailwayCli())) {
       const choice = await vscode.window.showWarningMessage(
-        'railway CLI를 찾지 못했습니다(미설치이거나 PATH에 없음). 설치 후 다시 시도하세요.',
-        'CLI 설치 가이드',
+        'The railway CLI was not found (not installed or not on PATH). Install it and try again.',
+        'CLI install guide',
       );
-      if (choice === 'CLI 설치 가이드') {
+      if (choice === 'CLI install guide') {
         vscode.env.openExternal(vscode.Uri.parse(RAILWAY_CLI_DOCS));
       }
       return;
     }
     const t = await this.resolveTarget();
     if (!t) { return; }
+
+    // SSH requires a running instance — a sleeping/undeployed service is not reachable.
+    let running: boolean;
+    try {
+      const dep = await this.api.getLatestDeployment(t.projectId, t.serviceId, t.environmentId);
+      running = dep?.status === 'SUCCESS';
+      if (!running) {
+        if (!dep) {
+          vscode.window.showWarningMessage(
+            `No deployment found for ${t.serviceName} (${t.environmentName}). Deploy it before using SSH.`,
+          );
+        } else if (dep.status === 'SLEEPING') {
+          vscode.window.showWarningMessage(
+            `${t.serviceName} is sleeping. SSH needs a running instance — send a request to wake it, then try again.`,
+          );
+        } else {
+          vscode.window.showWarningMessage(
+            `${t.serviceName} has no running instance (status: ${dep.status}). SSH is only available while it is running.`,
+          );
+        }
+        return;
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage(`Failed to check deployment status: ${msg(err)}`);
+      return;
+    }
+
     if (hasUnsafeShellChars(t.serviceName) || hasUnsafeShellChars(t.environmentName)) {
       vscode.window.showErrorMessage(
-        '서비스/환경 이름에 셸에서 안전하지 않은 문자가 있어 SSH 명령을 자동 구성할 수 없습니다. 터미널에서 직접 railway ssh를 실행하세요.',
+        'The service/environment name contains characters that are unsafe to pass through a shell. Run "railway ssh" directly in a terminal.',
       );
       return;
     }
@@ -130,7 +130,7 @@ export class LinkedProjectService implements vscode.Disposable {
       projectId: t.projectId, serviceName: t.serviceName, environmentName: t.environmentName,
     }));
     vscode.window.showInformationMessage(
-      'SSH는 railway CLI 자체 로그인(railway login)을 사용합니다. 미로그인 시 터미널 안내를 따르세요.',
+      'SSH uses the railway CLI\'s own login (railway login). If you are not logged in, follow the prompt in the terminal.',
     );
   }
 
@@ -141,7 +141,7 @@ export class LinkedProjectService implements vscode.Disposable {
     try {
       vars = await this.api.getVariables(t.projectId, t.environmentId, t.serviceId);
     } catch (err) {
-      vscode.window.showErrorMessage(`변수 조회 실패: ${msg(err)}`);
+      vscode.window.showErrorMessage(`Failed to fetch variables: ${msg(err)}`);
       return;
     }
     const uri = await vscode.window.showSaveDialog({
@@ -152,11 +152,11 @@ export class LinkedProjectService implements vscode.Disposable {
     try {
       await vscode.workspace.fs.writeFile(uri, Buffer.from(formatDotEnv(vars), 'utf-8'));
     } catch (err) {
-      vscode.window.showErrorMessage(`.env 내보내기 실패: ${msg(err)}`);
+      vscode.window.showErrorMessage(`Failed to export .env: ${msg(err)}`);
       return;
     }
     vscode.window.showInformationMessage(
-      `${Object.keys(vars).length}개 변수를 ${uri.fsPath} 에 내보냈습니다.`,
+      `Exported ${Object.keys(vars).length} variable(s) to ${uri.fsPath}`,
     );
   }
 
@@ -179,34 +179,34 @@ export class LinkedProjectService implements vscode.Disposable {
       vscode.Uri.parse(`https://railway.com/project/${linked.id}`),
     );
     if (!opened) {
-      vscode.window.showErrorMessage('대시보드를 브라우저에서 열지 못했습니다.');
+      vscode.window.showErrorMessage('Failed to open the dashboard in a browser.');
     }
   }
 
   async changeTarget(): Promise<void> {
     const t = await this.resolveTarget(true);
     if (t) {
-      vscode.window.showInformationMessage(`대상: ${t.serviceName} (${t.environmentName})`);
+      vscode.window.showInformationMessage(`Target: ${t.serviceName} (${t.environmentName})`);
     }
   }
 
-  // ─── target 해소 (서비스/환경 QuickPick + 기억) ───
+  // ─── Target resolution (service/environment QuickPick + memory) ───
   private async resolveTarget(forcePick = false): Promise<Target | undefined> {
     const linked = this.tree.getLinkedProject();
     if (!linked) {
-      vscode.window.showInformationMessage('먼저 트리에서 프로젝트를 링크하세요.');
+      vscode.window.showInformationMessage('Link a project from the tree first.');
       return undefined;
     }
     let detail: { services: NamedItem[]; environments: NamedItem[] };
     try {
       detail = await this.api.getProjectDetail(linked.id);
     } catch (err) {
-      vscode.window.showErrorMessage(`프로젝트 정보 조회 실패: ${msg(err)}`);
+      vscode.window.showErrorMessage(`Failed to fetch project detail: ${msg(err)}`);
       return undefined;
     }
-    const env = await this.pick('env', linked.id, detail.environments, '환경 선택', forcePick);
+    const env = await this.pick('env', linked.id, detail.environments, 'Select environment', forcePick);
     if (!env) { return undefined; }
-    const svc = await this.pick('service', linked.id, detail.services, '서비스 선택', forcePick);
+    const svc = await this.pick('service', linked.id, detail.services, 'Select service', forcePick);
     if (!svc) { return undefined; }
     return {
       projectId: linked.id, projectName: linked.name,
@@ -221,7 +221,7 @@ export class LinkedProjectService implements vscode.Disposable {
   ): Promise<NamedItem | undefined> {
     if (items.length === 0) {
       vscode.window.showWarningMessage(
-        `링크된 프로젝트에 ${kind === 'env' ? '환경' : '서비스'}이(가) 없습니다.`,
+        `The linked project has no ${kind === 'env' ? 'environments' : 'services'}.`,
       );
       return undefined;
     }

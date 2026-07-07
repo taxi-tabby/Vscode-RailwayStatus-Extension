@@ -97,7 +97,7 @@ export async function activate(context: vscode.ExtensionContext) {
         treeProvider.refresh();
       } catch (err) {
         if (err instanceof DeviceAuthCancelled) { return; }
-        vscode.window.showErrorMessage(`Railway 로그인 실패: ${describeDeviceAuthError(err)}`);
+        vscode.window.showErrorMessage(`Railway sign-in failed: ${describeDeviceAuthError(err)}`);
       }
     }),
 
@@ -265,7 +265,6 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('railway.linkedActions', () => linkedService.showQuickActions()),
-    vscode.commands.registerCommand('railway.openTerminal', () => linkedService.openTerminal()),
     vscode.commands.registerCommand('railway.ssh', () => linkedService.ssh()),
     vscode.commands.registerCommand('railway.exportEnvLinked', () => linkedService.exportEnv()),
     vscode.commands.registerCommand('railway.changeLinkedTarget', () => linkedService.changeTarget()),

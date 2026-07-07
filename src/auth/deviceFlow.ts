@@ -61,7 +61,7 @@ async function readError(res: Response): Promise<string> {
 function parseTokenSet(raw: unknown, now: () => number): TokenSet {
   const j = (raw ?? {}) as { access_token?: string; refresh_token?: string; expires_in?: number };
   if (!j.access_token) {
-    throw new DeviceAuthError('unknown', 'token 응답에 access_token 없음');
+    throw new DeviceAuthError('unknown', 'token response has no access_token');
   }
   return {
     accessToken: j.access_token,
@@ -79,10 +79,10 @@ export async function requestDeviceCode(now: () => number = Date.now): Promise<D
       body: form({ client_id: RAILWAY_OAUTH_CLIENT_ID, scope: RAILWAY_OAUTH_SCOPES }),
     });
   } catch (e) {
-    throw new DeviceAuthError('network', `device code 요청 실패: ${errMessage(e)}`);
+    throw new DeviceAuthError('network', `device code request failed: ${errMessage(e)}`);
   }
   if (!res.ok) {
-    throw new DeviceAuthError('unknown', `device code 요청 실패 (HTTP ${res.status})`);
+    throw new DeviceAuthError('unknown', `device code request failed (HTTP ${res.status})`);
   }
   const j = (await res.json()) as {
     device_code: string; user_code: string; verification_uri: string;
@@ -125,17 +125,17 @@ export async function pollForToken(
       });
     } catch (e) {
       if (signal.aborted) { throw new DeviceAuthCancelled(); }
-      // 일시적 네트워크 오류: 대기 후 재시도
+      // transient network error: wait and retry
     }
 
     if (res) {
       if (res.ok) { return parseTokenSet(await res.json(), now); }
       const err = await readError(res);
       if (err === 'slow_down') { interval += DEVICE_POLL_SLOW_DOWN_STEP_MS; }
-      else if (err === 'authorization_pending') { /* 계속 폴링 */ }
+      else if (err === 'authorization_pending') { /* keep polling */ }
       else if (err === 'access_denied') { throw new DeviceAuthError('access_denied'); }
       else if (err === 'expired_token') { throw new DeviceAuthError('expired_token'); }
-      else { throw new DeviceAuthError('unknown', `token 폴링 실패: ${err}`); }
+      else { throw new DeviceAuthError('unknown', `token polling failed: ${err}`); }
     }
 
     await delay(interval);
@@ -158,7 +158,7 @@ export async function refreshAccessToken(
       }),
     });
   } catch (e) {
-    throw new DeviceAuthError('network', `토큰 갱신 실패: ${errMessage(e)}`);
+    throw new DeviceAuthError('network', `token refresh failed: ${errMessage(e)}`);
   }
   if (!res.ok) {
     const err = await readError(res);
@@ -170,10 +170,10 @@ export async function refreshAccessToken(
 export function describeDeviceAuthError(err: unknown): string {
   if (err instanceof DeviceAuthError) {
     switch (err.code) {
-      case 'access_denied': return '로그인이 거부되었습니다.';
-      case 'expired_token': return '코드가 만료되었습니다. 다시 시도하세요.';
-      case 'invalid_grant': return '세션이 만료되었습니다. 다시 로그인하세요.';
-      case 'network': return '네트워크 오류로 Railway에 연결하지 못했습니다.';
+      case 'access_denied': return 'The sign-in was denied.';
+      case 'expired_token': return 'The code expired. Please try again.';
+      case 'invalid_grant': return 'The session expired. Please sign in again.';
+      case 'network': return 'Could not reach Railway due to a network error.';
       default: return err.message;
     }
   }

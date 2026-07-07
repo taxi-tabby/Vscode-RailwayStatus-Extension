@@ -20,14 +20,14 @@ export class SessionManager {
       }
       const refreshed = await this.doRefresh();
       if (refreshed) { return refreshed; }
-      // 갱신 실패: invalid_grant면 토큰이 지워졌고, 네트워크 오류면 유지됨
+      // refresh failed: invalid_grant clears tokens, network errors keep them
       const still = await this.store.getAccessToken();
       if (still) { return still; }
     } else if (await this.store.getRefreshToken()) {
       const refreshed = await this.doRefresh();
       if (refreshed) { return refreshed; }
     }
-    // OAuth 경로 소진 → API 토큰 폴백
+    // OAuth path exhausted -> API token fallback
     return await this.store.getApiToken();
   }
 
@@ -49,7 +49,7 @@ export class SessionManager {
       const set = await this.refresh(rt);
       await this.store.storeOAuthTokens({
         accessToken: set.accessToken,
-        refreshToken: set.refreshToken ?? rt, // 응답에 없으면 기존 유지
+        refreshToken: set.refreshToken ?? rt, // keep the old one if the response omits it
         expiresAt: set.expiresAt,
       });
       return set.accessToken;
@@ -57,7 +57,7 @@ export class SessionManager {
       if (e instanceof DeviceAuthError && e.code === 'invalid_grant') {
         await this.store.clearOAuthTokens();
       }
-      // network/unknown → 토큰 보존
+      // network/unknown -> keep tokens
       return undefined;
     }
   }

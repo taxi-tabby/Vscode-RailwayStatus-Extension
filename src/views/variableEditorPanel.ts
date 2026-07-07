@@ -37,7 +37,7 @@ export class VariableEditorPanel {
       variables = {};
       const message = err instanceof Error ? err.message : String(err);
       vscode.window.showErrorMessage(
-        `Railway: 변수를 불러오지 못했습니다 (${message}). 빈 목록으로 표시됩니다.`
+        `Railway: Failed to load variables (${message}). Showing an empty list.`
       );
     }
 
