@@ -137,6 +137,36 @@
         "icon": "$(pinned-dirty)"
       },
       {
+        "command": "railway.linkedActions",
+        "title": "Linked Project: Quick Actions",
+        "category": "Railway",
+        "icon": "$(link)"
+      },
+      {
+        "command": "railway.openTerminal",
+        "title": "Open Railway Terminal (linked)",
+        "category": "Railway",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "railway.ssh",
+        "title": "SSH into Service (linked)",
+        "category": "Railway",
+        "icon": "$(terminal-bash)"
+      },
+      {
+        "command": "railway.exportEnvLinked",
+        "title": "Export .env (linked)",
+        "category": "Railway",
+        "icon": "$(export)"
+      },
+      {
+        "command": "railway.changeLinkedTarget",
+        "title": "Change Linked Service/Environment",
+        "category": "Railway",
+        "icon": "$(pinned-dirty)"
+      },
+      {
         "command": "railway.viewLogs",
         "title": "View Logs",
         "category": "Railway",
@@ -211,6 +241,26 @@
           "command": "railway.linkProject",
           "when": "viewItem == railwayProject",
           "group": "3_link"
+        },
+        {
+          "command": "railway.openTerminal",
+          "when": "viewItem == railwayProjectLinked",
+          "group": "2_linked@1"
+        },
+        {
+          "command": "railway.ssh",
+          "when": "viewItem == railwayProjectLinked",
+          "group": "2_linked@2"
+        },
+        {
+          "command": "railway.exportEnvLinked",
+          "when": "viewItem == railwayProjectLinked",
+          "group": "2_linked@3"
+        },
+        {
+          "command": "railway.changeLinkedTarget",
+          "when": "viewItem == railwayProjectLinked",
+          "group": "2_linked@4"
         },
         {
           "command": "railway.unlinkProject",
