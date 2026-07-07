@@ -17,8 +17,8 @@ export async function activate(context: vscode.ExtensionContext) {
   const authProvider = new RailwayAuthProvider(context, tokenStore, sessionManager);
 
   const apiClient = new RailwayApiClient({
-    getAccessToken: () => tokenStore.getAccessToken(),
-    getApiToken: () => tokenStore.getApiToken(),
+    getToken: () => sessionManager.getValidAccessToken(),
+    forceRefresh: () => sessionManager.forceRefresh(),
     onAuthFailure: () => {
       vscode.commands.executeCommand('setContext', 'railway.authenticated', false);
       vscode.window

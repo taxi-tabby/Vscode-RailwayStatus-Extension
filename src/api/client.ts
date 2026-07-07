@@ -25,22 +25,18 @@ interface WorkspaceWithProjects {
 }
 
 export class RailwayApiClient {
-  private getAccessToken: () => Promise<string | undefined>;
-  private getApiToken: () => Promise<string | undefined>;
+  private getToken: () => Promise<string | undefined>;
+  private forceRefresh: () => Promise<string | undefined>;
   private onAuthFailure: () => void;
 
   constructor(options: {
-    getAccessToken: () => Promise<string | undefined>;
-    getApiToken: () => Promise<string | undefined>;
+    getToken: () => Promise<string | undefined>;
+    forceRefresh: () => Promise<string | undefined>;
     onAuthFailure: () => void;
   }) {
-    this.getAccessToken = options.getAccessToken;
-    this.getApiToken = options.getApiToken;
+    this.getToken = options.getToken;
+    this.forceRefresh = options.forceRefresh;
     this.onAuthFailure = options.onAuthFailure;
-  }
-
-  private async getToken(): Promise<string | undefined> {
-    return (await this.getAccessToken()) ?? (await this.getApiToken());
   }
 
   private async request<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
@@ -49,18 +45,17 @@ export class RailwayApiClient {
       throw new Error('Not authenticated');
     }
 
-    const response = await fetch(RAILWAY_GRAPHQL_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({ query, variables }),
-    });
+    let response = await this.doFetch(query, variables, token);
 
     if (response.status === 401) {
-      this.onAuthFailure();
-      throw new Error('Authentication expired');
+      const newToken = await this.forceRefresh();
+      if (newToken) {
+        response = await this.doFetch(query, variables, newToken);
+      }
+      if (response.status === 401) {
+        this.onAuthFailure();
+        throw new Error('Authentication expired');
+      }
     }
 
     if (!response.ok) {
@@ -75,6 +70,21 @@ export class RailwayApiClient {
       throw new Error('No data in GraphQL response');
     }
     return json.data;
+  }
+
+  private doFetch(
+    query: string,
+    variables: Record<string, unknown> | undefined,
+    token: string,
+  ): Promise<Response> {
+    return fetch(RAILWAY_GRAPHQL_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ query, variables }),
+    });
   }
 
   async getWorkspaces(): Promise<WorkspaceWithProjects[]> {
