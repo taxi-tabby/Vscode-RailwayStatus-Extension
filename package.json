@@ -38,7 +38,7 @@
     "viewsWelcome": [
       {
         "view": "railwayStatus",
-        "contents": "Railway에 로그인하여 프로젝트를 확인하세요.\n[Railway로 로그인](command:railway.login)\n[API 토큰 사용](command:railway.loginWithToken)\n\n토큰은 [railway.com/account/tokens](https://railway.com/account/tokens) 에서 발급하세요.",
+        "contents": "Sign in to Railway to view your projects.\n[Sign in with Railway](command:railway.login)\n[Use API Token](command:railway.loginWithToken)\n\nGet your token at [railway.com/account/tokens](https://railway.com/account/tokens)",
         "when": "!railway.authenticated"
       }
     ],

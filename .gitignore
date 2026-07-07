@@ -3,6 +3,6 @@ dist/
 *.vsix
 .vscode-test/
 
-# docs 폴더는 PUBLISH.md만 추적하고 나머지는 무시
+# In docs/, track only PUBLISH.md; ignore the rest
 /docs/*
 !/docs/PUBLISH.md
