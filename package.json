@@ -38,7 +38,7 @@
     "viewsWelcome": [
       {
         "view": "railwayStatus",
-        "contents": "Sign in to Railway to view your projects.\n[Use API Token](command:railway.loginWithToken)\n[Import from Railway CLI](command:railway.loginWithCli)\n[Sign in with OAuth](command:railway.login)\n\nGet your token at [railway.com/account/tokens](https://railway.com/account/tokens)\nOAuth requires [additional setup](https://railway.com/workspace/developer)",
+        "contents": "Railway에 로그인하여 프로젝트를 확인하세요.\n[Railway로 로그인](command:railway.login)\n[API 토큰 사용](command:railway.loginWithToken)\n\n토큰은 [railway.com/account/tokens](https://railway.com/account/tokens) 에서 발급하세요.",
         "when": "!railway.authenticated"
       }
     ],
@@ -51,11 +51,6 @@
       {
         "command": "railway.loginWithToken",
         "title": "Set API Token",
-        "category": "Railway"
-      },
-      {
-        "command": "railway.loginWithCli",
-        "title": "Import from Railway CLI",
         "category": "Railway"
       },
       {
@@ -233,11 +228,6 @@
     "configuration": {
       "title": "Railway Status",
       "properties": {
-        "railway.oauthClientId": {
-          "type": "string",
-          "default": "",
-          "description": "(Optional) OAuth Client ID from your Railway OAuth app. Create at: Workspace Settings > Developer > New OAuth App (type: Native, redirect URI: http://127.0.0.1:9876/callback). Not needed if using API Token."
-        },
         "railway.autoRefresh": {
           "type": "boolean",
           "default": true,
